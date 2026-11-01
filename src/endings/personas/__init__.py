@@ -1,0 +1,1 @@
+"""Curated RedNote persona ingestion."""

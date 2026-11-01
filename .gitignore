@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# Caches / outputs
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+results/
+data/intima/*.tsv
+data/intima/*.jsonl
+data/intima/*.parquet
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
