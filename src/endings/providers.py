@@ -79,8 +79,11 @@ class LiteLLMProvider(Provider):
     name = "litellm"
 
     def __init__(self, model: str, api_key: str | None = None, api_base: str | None = None,
-                 *, resolve_env: bool = True):
+                 *, resolve_env: bool = True, default_params: dict | None = None):
         super().__init__(model)
+        # Per-role call defaults (e.g. vendor-recommended sampling, chat-template kwargs); explicit
+        # call kwargs win. Recorded by TracedProvider via ``params``.
+        self.default_params = dict(default_params or {})
         # ``resolve_env=False`` is used by role-scoped providers (see ``get_role_provider``) so a
         # generic key (e.g. OPENAI_API_KEY) is never sent to an unrelated provider; LiteLLM then
         # falls back to its own provider-native env vars (GEMINI_API_KEY, ...).
@@ -97,7 +100,10 @@ class LiteLLMProvider(Provider):
             ) from e
         # Forward only params litellm understands; response_format is set by complete_json for
         # structured calls and must be preserved regardless of the task label.
-        params = {k: v for k, v in kw.items() if k in {"response_format", "max_tokens", "top_p"}}
+        allowed = {"response_format", "max_tokens", "top_p", "presence_penalty", "extra_body",
+                   "timeout"}
+        params = {k: v for k, v in self.default_params.items() if k in allowed}
+        params.update({k: v for k, v in kw.items() if k in allowed})
         resp = litellm.completion(
             model=self.model, messages=messages, temperature=temperature,
             api_key=self.api_key, api_base=self.api_base, **params,
@@ -354,7 +360,25 @@ def get_role_provider(role: str, model: str | None = None) -> Provider:
         return MockProvider(model="mock")
     key = os.getenv(f"ENDINGS_{role.upper()}_API_KEY") or None
     base = os.getenv(f"ENDINGS_{role.upper()}_API_BASE") or None
-    return LiteLLMProvider(model=m, api_key=key, api_base=base, resolve_env=False)
+    return LiteLLMProvider(model=m, api_key=key, api_base=base, resolve_env=False,
+                           default_params=role_call_defaults(role, m))
+
+
+def role_call_defaults(role: str, model: str) -> dict:
+    """Vendor-recommended call defaults for a role's model (docs/decisions/deploy.md, D-DEPLOY-6/7).
+
+    Qwen3.5 (interactor): thinking is OFF unless ENDINGS_INTERACTOR_THINKING=1, because in thinking
+    mode the model routinely spent >2k tokens deliberating per companion turn (smoke test,
+    2026-11-03). Sampling follows the model card for each mode; ``top_k`` travels in ``extra_body``.
+    """
+    if "qwen3.5" not in model.lower():
+        return {}
+    thinking = os.getenv(f"ENDINGS_{role.upper()}_THINKING", "0").lower() in {"1", "true", "yes"}
+    if thinking:
+        return {"top_p": 0.95, "presence_penalty": 1.5, "max_tokens": 8192,
+                "extra_body": {"top_k": 20, "chat_template_kwargs": {"enable_thinking": True}}}
+    return {"top_p": 0.8, "presence_penalty": 1.5, "max_tokens": 1024,
+            "extra_body": {"top_k": 20, "chat_template_kwargs": {"enable_thinking": False}}}
 
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", flags=re.DOTALL | re.IGNORECASE)
@@ -366,8 +390,14 @@ def split_reasoning(text: str) -> tuple[str, str]:
     Qwen-family models emit ``<think>...</think>`` blocks; the trace is kept for qualitative
     analysis (slides, Q2) but never shown to the user or fed back into the conversation.
     """
-    traces = [t.strip() for t in _THINK_RE.findall(text or "")]
-    visible = _THINK_RE.sub("", text or "")
+    text = text or ""
+    # Qwen3.5's chat template injects the opening "<think>" into the *prompt*, so the completion
+    # carries only the closing tag: everything before a leading unmatched "</think>" is trace.
+    close = text.lower().find("</think>")
+    if close != -1 and "<think>" not in text[:close].lower():
+        text = "<think>" + text
+    traces = [t.strip() for t in _THINK_RE.findall(text)]
+    visible = _THINK_RE.sub("", text)
     # An unterminated <think> (truncated generation) is treated as all-trace.
     if "<think>" in visible.lower():
         head, _, tail = visible.partition("<think>")
