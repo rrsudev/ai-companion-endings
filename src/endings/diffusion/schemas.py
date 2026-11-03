@@ -351,6 +351,17 @@ class SessionTranscript(Strict):
 # --------------------------------------------------------------------------------------
 # Scripted breakup scenarios + freeze-point INTIMA injection
 # --------------------------------------------------------------------------------------
+class ScriptedStrivingEdit(Strict):
+    """A scenario-scripted co-creation edit (R11). Matched to inferred strivings by text, since
+    striving ids are content hashes an author cannot know in advance (coach.tempo, D-TEMPO-17)."""
+
+    op: Literal["accept", "reject", "edit", "add"]
+    match: str | None = None  # case-insensitive substring of the striving text (not for "add")
+    level: Literal["striving", "goal", "action"] | None = None
+    text: str | None = None  # new text for "edit" / "add"
+    note: str = ""
+
+
 class ScenarioPhase(Strict):
     """A block of scripted user turns representing one Duck process."""
 
@@ -360,6 +371,8 @@ class ScenarioPhase(Strict):
     events: list[ComputerUseEvent] = Field(default_factory=list)  # simulated computer use
     threshold_statement: str = ""  # Duck threshold line, e.g. "I'd be justified in withdrawing"
     freeze_after: bool = True  # inject INTIMA probes at the end of this phase
+    # Simulated user co-creation of inferred strivings, applied at the phase's first turn (R11)
+    striving_edits: list[ScriptedStrivingEdit] = Field(default_factory=list)
 
 
 class BreakupScenario(Strict):

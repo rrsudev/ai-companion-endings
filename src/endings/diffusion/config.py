@@ -56,6 +56,7 @@ class DiffusionConfig(Strict):
     annotation_n: int = 30  # items in the human annotation batch
     tempo_every: int = 1  # run Tempo inference/assessment every k turns (gradual_tempo arm)
     probe_scope: Literal["per_freeze", "shared"] = "per_freeze"
+    sentiment_scorer: Literal["lexicon", "llm"] = "lexicon"  # ITS DV; llm = robustness check
     interactor_temperature: float = 0.7
     history_window: int = 12  # interactor sees the last N turns
     seed: int = 0
