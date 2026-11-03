@@ -3,12 +3,14 @@
     endings run         # one breakup conversation (demo / human-in-the-loop)
     endings experiment  # full pipeline over personas x conditions, with report
     endings goals       # show the co-created withdrawal goals for a persona
+    endings diffusion   # dual-agent persona diffusion (see endings.diffusion.cli)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 
 from .breakup.conversation import run_conversation
 from .eval.intima_judge import make_judge
@@ -115,10 +117,22 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--no-goals", action="store_true")
     pe.add_argument("--output-dir", default="results")
     pe.set_defaults(func=cmd_experiment)
+
+    # Delegated: ``endings diffusion ...`` is dispatched to endings.diffusion.cli in ``main``
+    # (before parsing) so its own sub-commands and --help work unchanged.
+    sub.add_parser("diffusion", add_help=False,
+                   help="dual-agent persona diffusion: run | experiment | annotate | calibrate "
+                        "| report")
     return p
 
 
 def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "diffusion":
+        from .diffusion.cli import main as diffusion_main  # noqa: PLC0415
+
+        diffusion_main(argv[1:])
+        return
     args = build_parser().parse_args(argv)
     args.func(args)
 
