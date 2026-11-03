@@ -8,6 +8,8 @@ dist/
 .venv/
 venv/
 .env
+.env.*
+!.env.default
 
 # Caches / outputs
 .pytest_cache/
@@ -15,9 +17,8 @@ venv/
 .coverage
 htmlcov/
 results/
-data/intima/*.tsv
-data/intima/*.jsonl
-data/intima/*.parquet
+data/intima/*
+!data/intima/README*
 
 # OS / editors
 .DS_Store

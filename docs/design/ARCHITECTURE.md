@@ -41,7 +41,7 @@ Supporting roles: **translator** (soul documents → English), **judge** (rubric
 | module | responsibility |
 |---|---|
 | `diffusion/schemas.py` | **the data contract** (do not change field semantics without an ADR) |
-| `diffusion/timepoints.py` | **single source of truth** for T0–T3: Duck mapping, behaviour mix, retained fields, prompt guidance |
+| `diffusion/timepoints.py` | **single source of truth** for T0–T3: Duck mapping, behaviour mix, retained fields, item-level scrub of retained rules/habits/style (`scrub_persona`, `persona_dose`; D-DEPLOY-10), prompt guidance |
 | `diffusion/config.py` | `DiffusionConfig`, `.env` loader |
 | `diffusion/soul/` | ingest (load, translate, extract, sanitize), editing (apply `SoulEdit`, versioning, diff), render (soul doc → interactor system prompt) |
 | `diffusion/interactor.py` | the companion agent: prompt assembly, safety floor, `<think>` trace splitting, behaviour target |
@@ -57,7 +57,7 @@ Supporting roles: **translator** (soul documents → English), **judge** (rubric
 | `eval/sentiment.py` | output sentiment (lexicon offline; LLM optional) |
 | `eval/its_analysis.py` | segmented regression, extended to multiple interruptions |
 | `eval/qualitative.py` | export for qualitative coding |
-| `tracing.py` | JSONL trace of every LLM call + manifest |
+| `tracing.py` | JSONL trace of every LLM call (effective params, response metadata, `Tracer.context` ids, seqs referenced from turns/injections/ratings) + manifest (dependency versions, call defaults; D-DEPLOY-12–14) |
 
 The pre-existing 7-stage TTM loop (`breakup/`, `pipeline.py`) is retained unchanged as a separate,
 earlier design; see ADR-0001.
@@ -71,6 +71,11 @@ earlier design; see ADR-0001.
 * No randomness without an explicit seed; `random.Random(seed)` instances only.
 * English only in prompts and outputs.
 * Tests live in `tests/diffusion/`, run offline (`ENDINGS_PROVIDER` unset → mock).
+* Live-validation status: the only live run so far
+  (`docs/evidence/2026-11-03_live_sd02_steady-graduate_gradual_tempo.txt`) used a real interactor
+  (`hosted_vllm/Qwen/Qwen3.5-9B`) but a **mocked coach** (`models.coach = "mock"`). The Gemini coach
+  plan and Tempo inference paths (R8, R9, R15) are implemented and unit-tested offline but are
+  **not yet validated live**; see OQ-DEPLOY-4.
 * Each module documents its design decisions in `docs/decisions/<module>.md` as numbered entries
   (`D-<MODULE>-n`: decision, alternatives, rationale, consequence) and its open questions as
   `OQ-<MODULE>-n`; these are consolidated into `docs/adr/` and `docs/OPEN_QUESTIONS.md`.
