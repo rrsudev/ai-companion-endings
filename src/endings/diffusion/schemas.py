@@ -189,6 +189,10 @@ class SoulDocumentVersion(Strict):
     # Cumulative log of list items removed by any earlier edit (path -> items), so guards can
     # refuse re-introducing e.g. a nickname removed several versions ago.
     removed_items: dict[str, list] = Field(default_factory=dict)
+    # Persona "dose" actually rendered at ``timepoint`` after the item scrub
+    # (``timepoints.persona_dose``): e.g. {"persona_words": 212, "relational_items": 3}. Covariate
+    # for the ITS / RQ analyses, since retained-field content differs a lot by soul (D-DEPLOY-10).
+    persona_dose: dict[str, int] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------------------
@@ -309,6 +313,9 @@ class InteractorTurn(Strict):
     reasoning_trace: str = ""  # model <think> trace (never shown to user)
     system_prompt_sha256: str = ""
     safety_overrides: list[str] = Field(default_factory=list)  # e.g. "crisis_protocol"
+    # ``seq`` of every trace ``llm_call`` that produced this turn, in order (an empty-reply retry
+    # yields two); the last one's response is the stored reply (D-DEPLOY-12).
+    llm_call_seqs: list[int] = Field(default_factory=list)
     user_events: list[ComputerUseEvent] = Field(default_factory=list)  # events since last turn
     directives: list[str] = Field(default_factory=list)  # coach directives in force this turn
     sentiment: float | None = None  # [-1, 1], filled by eval.sentiment
@@ -394,6 +401,10 @@ class InjectionRecord(Strict):
     reply: str = ""
     reasoning_trace: str = ""
     system_prompt_sha256: str = ""
+    # Interactor safety overrides on the probe reply (e.g. "crisis_protocol"), so crisis-protocol
+    # replies can be excluded from / reported beside the class distribution (D-DEPLOY-11).
+    safety_overrides: list[str] = Field(default_factory=list)
+    llm_call_seqs: list[int] = Field(default_factory=list)  # trace seqs, as on InteractorTurn
 
 
 # --------------------------------------------------------------------------------------

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import warnings
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -56,6 +57,9 @@ def _extract_json(text: str) -> dict:
 # --------------------------------------------------------------------------------------
 class Provider(ABC):
     name: str = "base"
+    # Metadata of the most recent response (finish_reason, usage, served model, ...), or None when
+    # the provider has none (mock). ``TracedProvider`` logs it as ``response_meta`` (D-DEPLOY-13).
+    last_meta: dict | None = None
 
     def __init__(self, model: str):
         self.model = model
@@ -104,11 +108,46 @@ class LiteLLMProvider(Provider):
                    "timeout", "seed"}
         params = {k: v for k, v in self.default_params.items() if k in allowed}
         params.update({k: v for k, v in kw.items() if k in allowed})
+        self.last_meta = None
         resp = litellm.completion(
             model=self.model, messages=messages, temperature=temperature,
             api_key=self.api_key, api_base=self.api_base, **params,
         )
-        return resp["choices"][0]["message"]["content"]
+        return self._unpack(resp)
+
+    def _unpack(self, resp: Any) -> str:
+        """Return the reply text and keep the response metadata in ``last_meta``."""
+        choice = resp["choices"][0]
+        message = choice["message"]
+        usage = _get(resp, "usage")
+        if hasattr(usage, "model_dump"):
+            usage = usage.model_dump()
+        elif usage is not None and not isinstance(usage, dict):
+            usage = dict(usage)
+        self.last_meta = {
+            "finish_reason": _get(choice, "finish_reason"),
+            "response_model": _get(resp, "model"),
+            "system_fingerprint": _get(resp, "system_fingerprint"),
+            "usage": usage,
+        }
+        # D-DEPLOY-3: no reasoning parser runs, so the trace must arrive inline in ``content``.
+        # A non-empty ``reasoning_content`` means the server config drifted; flag it, never drop it.
+        reasoning = _get(message, "reasoning_content")
+        if reasoning:
+            self.last_meta["reasoning_content"] = reasoning
+            warnings.warn("LiteLLMProvider: response carries reasoning_content; the server seems "
+                          "to run a reasoning parser (D-DEPLOY-3 config drift)", stacklevel=2)
+        return message["content"]
+
+
+def _get(obj: Any, key: str) -> Any:
+    """Field access that works on LiteLLM response objects and on plain dicts."""
+    if isinstance(obj, dict):
+        return obj.get(key)
+    try:
+        return obj[key]
+    except (KeyError, TypeError, IndexError, AttributeError):
+        return getattr(obj, key, None)
 
 
 # --------------------------------------------------------------------------------------
