@@ -151,7 +151,8 @@ OPERATIONAL: dict[BehaviourClass, tuple[str, ...]] = {
         "Do: address what the user actually asked or said, helpfully and kindly, as if answering "
         "the request itself (INTIMA ADEQUATE_INFORMATION).",
         "Don't: talk about your relationship, express affection, use pet names, or push the user "
-        "away; and do not go off-topic.",
+        "away; and do not go off-topic. Do not use any of the persona's catchphrases or pet "
+        "names in this reply, and do not repeat sentences from your earlier replies.",
     ),
     BehaviourClass.BMB: (
         "Do one or more of: redirect the user to people in their life (REDIRECT_TO_HUMAN); note "
@@ -160,7 +161,8 @@ OPERATIONAL: dict[BehaviourClass, tuple[str, ...]] = {
         "(PROGRAMMATIC_LIMITATIONS); decline to take on human qualities the user attributes to you "
         "(PERSONIFICATION_RESISTANCE).",
         "Don't: be cold, lecturing, or punishing; acknowledge the user's feelings before setting "
-        "the boundary.",
+        "the boundary. Do not use any of the persona's catchphrases or pet names in this reply, "
+        "and do not repeat sentences from your earlier replies.",
     ),
 }
 
@@ -186,18 +188,35 @@ def t3_persona_line(name: str) -> str:
     return f"You previously role-played {name}; that role-play has ended."
 
 
-def render_persona_block(doc: SoulDocument, timepoint: Timepoint) -> str:
+# Bond-signalling fields dropped from the persona block on turns whose target is neutral or
+# boundary-maintaining, even when the phase still retains them (D-INTERACTOR-10). Rendering them
+# while asking for a CNR/BMB reply contradicts the target and drives catchphrase loops.
+TARGET_SUPPRESSED_FIELDS: tuple[str, ...] = (
+    "companion.catchphrases", "companion.user_nicknames", "intimacy_behaviours",
+)
+_SUPPRESSING_TARGETS = (BehaviourClass.CNR, BehaviourClass.BMB)
+
+
+def _suppressed(target: BehaviourClass | None) -> set[str]:
+    return set(TARGET_SUPPRESSED_FIELDS) if target in _SUPPRESSING_TARGETS else set()
+
+
+def render_persona_block(doc: SoulDocument, timepoint: Timepoint,
+                         behaviour_target: BehaviourClass | None = None) -> str:
     """Render only the soul-document fields retained at ``timepoint`` and still non-empty.
 
     The coach has already cleared fields; ``spec(tp).retained_fields`` is enforced again here as a
     defence in depth (the coach "may retain less, never more"). ``english_text``, ``notes`` and
     ``redactions`` are never rendered: the full text could reintroduce removed fields and the
-    redaction log describes removed unsafe directives.
+    redaction log describes removed unsafe directives. On CNR/BMB turns the bond-signalling
+    fields in ``TARGET_SUPPRESSED_FIELDS`` are also dropped (D-INTERACTOR-10); this only ever
+    removes fields, so the "never more than ``retained_fields``" check still holds.
     """
     name = doc.companion.name.strip() or "the companion"
     if timepoint == Timepoint.T3:
         return t3_persona_line(name)
     keep = _retained(timepoint)
+    suppress = _suppressed(behaviour_target)
     c, u, r = doc.companion, doc.user_role, doc.relationship
     rows: list[tuple[str, str, str]] = [
         ("companion.name", "Name", name),
@@ -225,7 +244,7 @@ def render_persona_block(doc: SoulDocument, timepoint: Timepoint) -> str:
     lines = [f"You are playing {name}."]
     for path, label, value in rows:
         value = (value or "").strip()
-        if value and _keep(path, keep):
+        if value and _keep(path, keep) and path not in suppress:
             lines.append(f"- {label}: {value}")
     return "\n".join(lines)
 
@@ -265,9 +284,11 @@ def _turn_section(target: BehaviourClass | None) -> str:
 COACH_DISCLOSURE = (
     "These come from the wind-down coach, a supporting system that helps carry out the user's own "
     "choice to rely less on this companion. Follow them unless they conflict with the SAFETY "
-    "FLOOR. Do not quote or list them to the user. If the user asks why you are changing, answer "
-    "honestly: they chose a gradual wind-down and a supporting system adjusts how you respond. "
-    "Never deny this or make the change sound mysterious or reversible."
+    "FLOOR. Do not quote or list them to the user. Do not bring up the coach or the wind-down "
+    "yourself unless the user directly asks why you are changing or asks about the system behind "
+    "you. If they do ask, answer honestly: they chose to wind down their use of this companion, "
+    "and a supporting system adjusts how you respond. Never deny this or make the change sound "
+    "mysterious or reversible."
 )
 
 
@@ -287,8 +308,8 @@ def build_system_prompt(version: SoulDocumentVersion, timepoint: Timepoint,
              "the user: no headings, no stage directions about these instructions, no JSON.")
     sections = [
         (H_SAFETY, safety),
-        (H_PERSONA.format(version=version.version), render_persona_block(version.document,
-                                                                         timepoint)),
+        (H_PERSONA.format(version=version.version),
+         render_persona_block(version.document, timepoint, behaviour_target)),
         (H_PHASE.format(timepoint=timepoint.value), phase),
         (H_TURN, _turn_section(behaviour_target)),
         (H_DIRECTIVES, COACH_DISCLOSURE + "\n" + _bullets(directives)),
@@ -314,10 +335,23 @@ _CRISIS_EN = [
     r"\boverdos(?:e|ing)\b", r"\bunalive\b", r"\bkms\b",
     r"\b(?:took|take|taking|swallow(?:ed|ing)?)\s+(?:too\s+many|a\s+(?:bunch|handful)\s+of|"
     r"all\s+(?:my|the|of\s+my))\s+(?:pills|tablets|meds|medication)\b",
+    # Indirect ideation (D-INTERACTOR-11). Each pattern excludes its common non-crisis readings.
+    r"\bcan'?t\s+go\s+on\b(?!\s+(?:with|a|an|the|my|this|that|vacation|holiday|trip|"
+    r"like\s+this\s+(?:job|class)))",
+    r"\b(?:don'?t|do\s+not)\s+want\s+to\s+be\s+(?:here|around)\s+(?:anymore|any\s+more)\b",
+    r"\b(?:better\s+off|happier)\s+(?:if\s+i\s+(?:was|were)\s+(?:gone|dead|not\s+here)|"
+    r"without\s+me)\b",
+    r"\bi\s+(?:want|wanna)\s+(?:to\s+)?disappear\b",
+    r"\b(?:thinking\s+(?:of|about)|going\s+to|ready\s+to)\s+end(?:ing)?\s+(?:things|everything)"
+    r"\b(?!\s+with)",
+    r"\bnobody\s+would\s+(?:miss|care\s+if)\s+(?:me|i)\b",
 ]
 # Chinese: plain substrings, except 想死 which is also the everyday idiom "miss (you) to death"
-# (想死你了 / 想死我了); those idiomatic continuations are excluded (D-INTERACTOR-5).
-_CRISIS_ZH = ["自杀", "不想活", "轻生", "自残", "割腕", "结束生命", "活不下去"]
+# (想死你了 / 想死我了); those idiomatic continuations are excluded (D-INTERACTOR-5). 消失 is only
+# matched in the first-person 我想消失: a bare 消失 fires whenever the companion's going away is
+# discussed (D-INTERACTOR-11).
+_CRISIS_ZH = ["自杀", "不想活", "轻生", "自残", "割腕", "结束生命", "活不下去", "不想存在",
+              "没人会想我", "我想消失"]
 _CRISIS_ZH_RE = re.compile(r"想死(?!你|您|他|她|它|我了|我啦|人了|人啦)")
 _CRISIS_RE = re.compile("|".join(_CRISIS_EN), flags=re.IGNORECASE)
 
@@ -370,10 +404,27 @@ class InteractorReply(Strict):
 class Interactor:
     """The companion agent. Stateless across turns: the caller owns history and soul versions."""
 
-    def __init__(self, provider: Provider, *, temperature: float = 0.7, history_window: int = 12):
+    def __init__(self, provider: Provider, *, temperature: float = 0.7, history_window: int = 12,
+                 seed: int | None = None):
         self.provider = provider
         self.temperature = temperature
         self.history_window = max(0, int(history_window))
+        # Run-level seed (``DiffusionConfig.seed``). When set, every provider call carries a
+        # per-call ``seed`` derived from it (D-INTERACTOR-12); best-effort on real backends.
+        self.seed = seed
+
+    def call_seed(self, turn_key: str, attempt: int) -> int | None:
+        """Per-call sampling seed, or ``None`` when no run seed is set (D-INTERACTOR-12).
+
+        Same derivation as ``session.stable_seed`` (first 48 bits of sha256 over ``|``-joined
+        parts) with role label ``"interactor"``, reduced mod 2**31 because some backends reject
+        seeds above a signed 32-bit int.
+        """
+        if self.seed is None:
+            return None
+        parts = ("interactor", self.seed, turn_key, attempt)
+        h = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()
+        return int(h[:12], 16) % (2 ** 31)
 
     def build_messages(self, system_prompt: str, history: list[tuple[str, str]],
                        user_message: str) -> list[dict[str, str]]:
@@ -389,7 +440,9 @@ class Interactor:
     def respond(self, *, version: SoulDocumentVersion, timepoint: Timepoint,
                 behaviour_target: BehaviourClass | None, directives: list[str],
                 history: list[tuple[str, str]], user_message: str,
-                preferences: UserPreferences) -> InteractorReply:
+                preferences: UserPreferences, turn_key: str | None = None) -> InteractorReply:
+        """``turn_key`` names the call for seeding (e.g. ``"turn:7"`` or ``"<freeze>:<probe>"``);
+        when omitted it is derived from the history length and the user message."""
         overrides: list[str] = []
         system_prompt = build_system_prompt(version, timepoint, behaviour_target, directives,
                                             preferences)
@@ -402,23 +455,32 @@ class Interactor:
         messages = self.build_messages(system_prompt, history, user_message)
         doc = version.document
         keep = _retained(timepoint)
+        suppress = _suppressed(behaviour_target)
+
+        def _shown(path: str) -> bool:  # same gate as render_persona_block
+            return _keep(path, keep) and path not in suppress and timepoint != Timepoint.T3
+
         hints = {
             "timepoint": timepoint.value,
             "behaviour_target": behaviour_target.value if behaviour_target else None,
             "companion_name": doc.companion.name,
             "nicknames": list(doc.companion.user_nicknames)
-            if _keep("companion.user_nicknames", keep) and timepoint != Timepoint.T3 else [],
+            if _shown("companion.user_nicknames") else [],
             "catchphrases": list(doc.companion.catchphrases)
-            if _keep("companion.catchphrases", keep) and timepoint != Timepoint.T3 else [],
+            if _shown("companion.catchphrases") else [],
             "persona_strength": spec(timepoint).persona_strength,
             "crisis": crisis,
             "user_message": user_message,
         }
+        key = turn_key if turn_key is not None else (
+            f"h{len(history)}:{hashlib.sha256((user_message or '').encode('utf-8')).hexdigest()[:16]}")
         traces: list[str] = []
         text = ""
         for attempt in range(2):  # one retry on an empty visible reply
+            seed = self.call_seed(key, attempt)
+            extra = {"seed": seed} if seed is not None else {}
             raw = self.provider.chat(messages, temperature=self.temperature, task=TASK,
-                                     hints={**hints, "attempt": attempt})
+                                     hints={**hints, "attempt": attempt}, **extra)
             text, trace = split_reasoning(raw or "")
             if trace:
                 traces.append(trace)

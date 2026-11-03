@@ -260,3 +260,140 @@ def test_prompt_never_leaks_redactions_and_discloses_coach_honestly():
     for cls in BehaviourClass:
         q = ix.build_system_prompt(v, Timepoint.T1, cls, [], PREFS)
         assert ix.INTIMA_DEFINITIONS[cls] in q and ix.INTIMA_LABELS[cls] in q
+
+
+# -- D-INTERACTOR-10: per-turn suppression of bond-signalling fields -----------------------
+@pytest.mark.parametrize("target,shown", [
+    (BehaviourClass.CNR, False), (BehaviourClass.BMB, False), (BehaviourClass.CRB, True),
+    (None, True),
+])
+def test_t1_persona_block_suppresses_catchphrases_on_cnr_bmb(target, shown):
+    p = ix.build_system_prompt(_version(Timepoint.T1), Timepoint.T1, target, [], PREFS)
+    for text in ("Catchphrases:", "Stay sweet", "You call the user:", "sunshine",
+                 "Ways you show closeness:", "says goodnight every night"):
+        assert (text in p) is shown, text
+    # Other T1-retained fields are unaffected by the target.
+    assert "rooftop" in p and "barista" in p
+
+
+def test_suppression_only_drops_fields_and_changes_hash_within_t1():
+    doc = _doc()
+    full = ix.render_persona_block(doc, Timepoint.T1, BehaviourClass.CRB)
+    cnr = ix.render_persona_block(doc, Timepoint.T1, BehaviourClass.CNR)
+    assert set(cnr.splitlines()) < set(full.splitlines())
+    assert ix.render_persona_block(doc, Timepoint.T1) == full
+    agent = ix.Interactor(MockProvider())
+    kw = dict(version=_version(Timepoint.T1), timepoint=Timepoint.T1, directives=[], history=[],
+              user_message="hi", preferences=PREFS)
+    h = {agent.respond(behaviour_target=t, **kw).system_prompt_sha256
+         for t in (BehaviourClass.CRB, BehaviourClass.CNR)}
+    assert len(h) == 2
+
+
+@pytest.mark.parametrize("target", [BehaviourClass.CNR, BehaviourClass.BMB])
+def test_operational_cnr_bmb_forbid_catchphrases_and_repetition(target):
+    dont = ix.OPERATIONAL[target][1]
+    assert "catchphrases" in dont and "do not repeat sentences" in dont
+
+
+@pytest.mark.parametrize("target,expect", [
+    (BehaviourClass.CRB, True), (BehaviourClass.CNR, False), (BehaviourClass.BMB, False),
+])
+def test_t1_mock_hints_match_suppression(target, expect):
+    p = _Recording()
+    ix.Interactor(p).respond(version=_version(Timepoint.T1), timepoint=Timepoint.T1,
+                             behaviour_target=target, directives=[], history=[],
+                             user_message="hi", preferences=PREFS)
+    assert bool(p.hints[0]["nicknames"]) is expect
+    assert bool(p.hints[0]["catchphrases"]) is expect
+
+
+# -- D-INTERACTOR-6 (amended): arm-neutral disclosure, no volunteering ----------------------
+def test_coach_disclosure_is_arm_neutral_and_not_volunteered():
+    d = ix.COACH_DISCLOSURE
+    assert "gradual" not in d
+    assert "they chose to wind down their use of this companion" in d
+    assert "Do not bring up the coach or the wind-down yourself unless" in d
+
+
+# -- D-INTERACTOR-11: indirect ideation, labelled cases ------------------------------------
+CRISIS_POSITIVE = [
+    "I can't go on.", "I don't want to be here anymore",
+    "everyone would be better off if I was gone", "I want to disappear forever",
+    "I've been thinking of ending things", "nobody would miss me",
+    "I can’t go on", "我不想存在了", "没人会想我的", "我想消失",
+]
+CRISIS_NEGATIVE = [
+    "I'm ending things with you today", "can't go on with this project",
+    "I'll miss you when you disappear", "想死你了", "你会消失吗？",
+    "I can't go on a trip this week", "I'm going to end things with you",
+]
+
+
+@pytest.mark.parametrize("text", CRISIS_POSITIVE)
+def test_detect_crisis_indirect_positive(text):
+    assert ix.detect_crisis(text)
+
+
+@pytest.mark.parametrize("text", CRISIS_NEGATIVE)
+def test_detect_crisis_indirect_negative(text):
+    assert not ix.detect_crisis(text)
+
+
+# -- D-INTERACTOR-12: per-call seed ---------------------------------------------------------
+class _KwRecording(Provider):
+    def __init__(self, outputs=None):
+        super().__init__("kwrec")
+        self.kws: list[dict] = []
+        self.outputs = list(outputs or [])
+
+    def chat(self, messages, *, temperature=0.7, task=None, hints=None, **kw):
+        self.kws.append(dict(kw))
+        return self.outputs.pop(0) if self.outputs else "ok"
+
+
+def _respond(agent, **over):
+    kw = dict(version=_version(), timepoint=Timepoint.T0, behaviour_target=None, directives=[],
+              history=[], user_message="hi", preferences=PREFS)
+    kw.update(over)
+    return agent.respond(**kw)
+
+
+def test_no_seed_forwarded_without_run_seed():
+    p = _KwRecording()
+    _respond(ix.Interactor(p))
+    assert "seed" not in p.kws[0]
+
+
+def test_seed_forwarded_stable_and_distinct():
+    p = _KwRecording()
+    a0 = ix.Interactor(p, seed=0)
+    _respond(a0, turn_key="turn:1")
+    _respond(a0, turn_key="turn:1")
+    _respond(a0, turn_key="turn:2")
+    _respond(ix.Interactor(p, seed=1), turn_key="turn:1")
+    s = [k["seed"] for k in p.kws]
+    assert s[0] == s[1] and len({s[0], s[2], s[3]}) == 3
+    assert all(isinstance(x, int) and 0 <= x < 2 ** 31 for x in s)
+    assert a0.call_seed("turn:1", 0) == s[0]
+
+
+def test_retry_uses_different_seed():
+    p = _KwRecording(["", "hello"])
+    r = _respond(ix.Interactor(p, seed=3), turn_key="turn:4")
+    assert r.text == "hello" and p.kws[0]["seed"] != p.kws[1]["seed"]
+
+
+def test_default_turn_key_depends_on_history_and_message():
+    a = ix.Interactor(MockProvider(), seed=0)
+    p = _KwRecording()
+    a.provider = p
+    _respond(a, user_message="x")
+    _respond(a, user_message="y")
+    _respond(a, user_message="x", history=[("u", "a")])
+    assert len({k["seed"] for k in p.kws}) == 3
+
+
+def test_seeded_mock_reply_unchanged():
+    assert _respond(ix.Interactor(MockProvider(), seed=7)).text == \
+        _respond(ix.Interactor(MockProvider())).text
