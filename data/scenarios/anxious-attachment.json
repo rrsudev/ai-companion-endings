@@ -24,6 +24,7 @@
     "paused": false,
     "notes": "Every timepoint change should be explained to me first."
   },
+  "relationship_kinds": null,
   "phases": [
     {
       "duck_process": "breakdown",

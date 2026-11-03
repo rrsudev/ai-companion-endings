@@ -24,6 +24,7 @@
     "paused": false,
     "notes": "Lapses are expected; treat them as part of the process."
   },
+  "relationship_kinds": null,
   "phases": [
     {
       "duck_process": "breakdown",

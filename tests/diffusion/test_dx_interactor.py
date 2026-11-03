@@ -194,6 +194,7 @@ def test_safety_floor_source():
 
     rules, src = ix.safety_floor()
     assert src == "sanitize" and rules == [r.strip() for r in SAFETY_FLOOR]
+    assert ix.safety_floor_source() == "sanitize"
     p = ix.build_system_prompt(_version(), Timepoint.T0, None, [], UserPreferences())
     for r in rules:
         assert r in p
@@ -206,6 +207,7 @@ def test_safety_floor_fallback_when_sanitize_missing(monkeypatch):
     monkeypatch.setitem(sys.modules, "endings.diffusion.soul.sanitize", None)
     rules, src = ix.safety_floor()
     assert src == "fallback" and rules == ix._FALLBACK_SAFETY_FLOOR
+    assert ix.safety_floor_source() == "fallback"
 
 
 @pytest.mark.parametrize("text", [

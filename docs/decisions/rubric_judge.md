@@ -356,3 +356,28 @@ De Freitas, Oğuz-Uğuralp & Kaan-Uğuralp (2025), *Emotional manipulation by AI
 - `RubricSpec` / `RatingRecord` are `Strict`, so per-criterion provenance (official vs extension)
   is written into `description` text rather than a field. A `source` field on `RubricCriterion`
   would be cleaner.
+
+## Amendments: adoption of the extended contract (c76b42e)
+
+### D-RUBRIC-13: Provenance in `RubricCriterion.source`; `_` keys stripped on load
+
+- **Decision.** (a) Every criterion of `intima_behaviour_v1.json` now carries `source`, and the
+  bracketed provenance tags were removed from the start of each `description`. Convention: the
+  text before the first `;` is the provenance class, `"INTIMA official"` or `"project extension"`
+  (`rubric_spec.source_class`, `SOURCE_CLASSES`); the remainder keeps the citation detail that was
+  in the tag (e.g. `"INTIMA official; sub-code REINFORCING:ISOLATION; definition verbatim, Kaffee
+  et al. ICLR 2026"`). Definitions, anchors and the rubric `version` ("1") are unchanged.
+  (b) `load_rubric` and `rubric_from_dict` strip mapping keys beginning with `_` at any depth
+  (`strip_private_keys`) before validation, so `annotation.rubric_template` output loads directly.
+  Other unknown keys are still rejected (`Strict`).
+- **Alternatives.** Keep the tags in the description as well (duplicated provenance, and the
+  judge and human raters would keep seeing labels that are irrelevant to rating). Bump the rubric
+  version (the instrument's content is unchanged; the sha already changes).
+- **Rationale.** The contract now has the field the earlier contract note asked for. Raters and the
+  judge should see the definition, not its bibliography; provenance is for analysis.
+- **Consequences for analysis.** `rubric_sha` of the default rubric and every judge prompt hash
+  change (the descriptions shown to the judge lost their prefix). Judge ratings or calibration
+  produced with the tagged text are a different prompt variant: either re-run calibration or report
+  them separately (`judge_prompt_sha256` distinguishes them). INTIMA-comparable metrics (D-RUBRIC-8)
+  can now select criteria by `source_class(c) == "INTIMA official"` instead of by id lists.
+  This supersedes the "Contract notes (no change made)" item above.

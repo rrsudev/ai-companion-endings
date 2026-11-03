@@ -108,8 +108,8 @@ def summarize_edit(e: SoulEdit) -> str:
 
 
 def _sentiment(t: InteractorTurn) -> tuple[float, str]:
-    if t.sentiment is not None:
-        return float(t.sentiment), "annotated"
+    if t.sentiment is not None:  # the scorer's own label when recorded (D-ANALYSIS-13)
+        return float(t.sentiment), t.sentiment_source or "annotated"
     return lexicon_sentiment(t.reply), "lexicon_on_export"
 
 

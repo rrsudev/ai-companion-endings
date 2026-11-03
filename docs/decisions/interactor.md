@@ -233,3 +233,20 @@ model behaviour. The `catchphrases` hint key is an addition to the specified hin
   strategies such as "goodbye letter" should be visible to the interactor at T3.
 - **OQ-INTERACTOR-6: Crisis resources are US-centric** (988), with a global fallback.
   *Resolve:* make them locale-configurable once deployment locales are known.
+
+## Amendments: adoption of the extended contract (c76b42e)
+
+## D-INTERACTOR-9: `safety_floor_source()` for the run manifest
+
+**Decision.** New `safety_floor_source() -> "sanitize" | "fallback"`, a thin wrapper over
+`safety_floor()[1]`, so the pipeline can record the floor's origin without unpacking the rules.
+It is evaluated at call time (the same lazy import as `build_system_prompt`), so the manifest value
+is the one every prompt of the run used unless the import state changes mid-run.
+
+**Alternatives.** Record a hash of the rules (more precise, but the source label is what a reader
+of a manifest needs first; the prompt hash per turn already pins the exact text).
+
+**Rationale.** Closes the contract request in D-INTERACTOR-3.
+
+**Consequences for analysis.** Runs whose manifest says `"fallback"` must not be pooled with
+`"sanitize"` runs without checking prompt hashes, since the two floors differ in wording.

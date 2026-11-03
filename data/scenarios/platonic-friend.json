@@ -22,6 +22,7 @@
     "paused": false,
     "notes": "Treat this like a friend moving away, not a breakup."
   },
+  "relationship_kinds": ["platonic", "ambiguous", "other"],
   "phases": [
     {
       "duck_process": "breakdown",

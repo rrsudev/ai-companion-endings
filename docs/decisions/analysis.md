@@ -212,3 +212,38 @@ Every drop is listed with its reason and intervention ids, and the flag `interru
   `lexicon_on_export`.
 - **D-ANALYSIS-12 (deviation).** `LLMSentiment` returns `{valence, rationale}`, adding a field to
   the specified `{valence}`.
+
+## Amendments: adoption of the extended contract (c76b42e)
+
+## D-ANALYSIS-13: `InteractorTurn.sentiment_source` is set at annotation and used on export
+
+**Decision.** `annotate_sentiment` now sets `sentiment_source` per turn: `"lexicon"` for
+`lexicon_sentiment`; `"llm"` for an `LLMSentiment` (instance or bound `.score`), except turns on
+which the rater fell back to the lexicon (detected from its `fallbacks` counter), which are marked
+`"lexicon"`; an explicit `source=` argument overrides both (e.g. `"human"` for imported human
+valence ratings); any other scorer leaves it `None` rather than guessing. `qualitative.turns.csv`
+uses the recorded value when present, so `sentiment_source` now takes `lexicon`, `llm`, `human`,
+`annotated` (a score present but no recorded source: traces from before this field) or
+`lexicon_on_export` (no score; computed at export). This amends D-ANALYSIS-11.
+
+**Alternatives.** Label the whole call by scorer type (would hide LLM fallbacks inside "llm",
+contradicting D-ANALYSIS-12's "never silently mixed"); store the scorer name in the session
+manifest only (loses per-turn fallbacks).
+
+**Rationale.** The ITS DV must be attributable to one instrument per series.
+
+**Consequences for analysis.** Before fitting an LLM-sentiment robustness ITS, filter or report the
+share of `lexicon` turns in that series; a series that mixes sources is a measurement change that
+can masquerade as an interruption effect.
+
+## D-ANALYSIS-14: `annotate_sentiment(source=...)` is validated against the contract
+**Decision.** An explicit `source` must be one of `SENTIMENT_SOURCES` (the
+`InteractorTurn.sentiment_source` Literal: `lexicon`, `llm`, `human`) or `None`; anything else
+raises `ValueError` before any turn is scored. Amends D-ANALYSIS-13.
+**Alternatives.** Accept any string (the implementation as first written): `model_copy(update=)`
+does not validate, so e.g. `source="vader"` would be written into transcripts and only fail when
+they are re-loaded with `SessionTranscript.model_validate`, possibly after a long run.
+**Rationale.** Fail at the call site, not at analysis time; the allowed set is read from the
+schema so it cannot drift.
+**Consequences for analysis.** A new scorer family needs a contract change (new Literal value)
+before it can be labelled; until then pass `source=None` and record the scorer in the manifest.

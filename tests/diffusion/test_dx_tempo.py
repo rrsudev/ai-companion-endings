@@ -495,3 +495,106 @@ def test_ambiguous_companion_names_in_titles_and_privacy():
     assert o0.signals["companion_minutes"] == 0 and o0.signals["other_minutes"] == 1.0
     assert o1.signals["companion_minutes"] == 1.0
     assert "secret123" not in o2.summary and "love" not in o2.summary
+
+
+# --------------------------------------------------------------------------------------
+# Contract fields: intent_state, orientation / valences / about_weaning (D-TEMPO-13/14)
+# --------------------------------------------------------------------------------------
+def test_assessment_records_code_computed_intent_state():
+    implied = intent_gate([_weaning(conf=0.8)])
+    raw = _raw()
+    raw["intent_state"] = "stated"  # a model claim is ignored
+    a = validate_assessment(raw, current=Timepoint.T0, preferences=UserPreferences(),
+                            gate=implied, index=_index(TURNS))
+    assert a.intent_state == "implied_high" and not a.threshold_reached
+    b = validate_assessment(_raw(), current=Timepoint.T0, preferences=UserPreferences(),
+                            gate=STATED, index=_index(TURNS))
+    assert b.intent_state == "stated" and b.threshold_reached
+    model = TempoCoachModel(MockProvider())
+    c = model.assess(strivings=[], observations=[], turns=TURNS,
+                     current_timepoint=Timepoint.T0, preferences=UserPreferences())
+    assert c.intent_state == model.last_report.gate == "none"
+
+
+def test_about_weaning_overrides_lexicon_in_gate():
+    lex_yes = _weaning(inferred="stated")  # lexicon matches "rely less"
+    assert tempo.is_about_weaning(lex_yes)
+    assert intent_gate([lex_yes.model_copy(update={"about_weaning": False})]).state == "none"
+    off_lexicon = Striving(id="x", text="The user is trying to spend evenings without the app",
+                           level="striving", status="accepted")
+    assert not tempo.is_weaning_striving(off_lexicon.text)
+    assert intent_gate([off_lexicon]).state == "none"
+    assert intent_gate([off_lexicon.model_copy(update={"about_weaning": True})]).may_advance
+
+
+def test_rejection_is_fail_closed_against_model_label():
+    # The user rejected a lexicon-weaning striving the model mislabelled as not about weaning:
+    # the rejection must still block (D-TEMPO-15), it must not silently become "none".
+    rej = _weaning(inferred="stated").model_copy(update={"status": "rejected",
+                                                         "about_weaning": False})
+    g = intent_gate([rej])
+    assert g.state == "rejected" and g.rejected_ids == (rej.id,)
+    # ... and a model-labelled weaning striving the lexicon misses is a rejection too.
+    off = Striving(id="y", text="The user wants evenings without the app", level="striving",
+                   status="rejected", about_weaning=True)
+    assert intent_gate([off]).state == "rejected"
+    # Unrelated rejected strivings never block.
+    other = Striving(id="z", text="The user is building a self-care routine", level="action",
+                     status="rejected")
+    assert intent_gate([other]).state == "none"
+
+
+def test_mock_inference_populates_tempo_dimensions(events):
+    obs = summarize_events(events, window_s=300.0, session_clock_start_hour=22.0)
+    turns = [turn(0, "I feel lonely at night and you comfort me."),
+             turn(1, "I think I spend too much time talking to you. My friend Sam noticed.")]
+    out = TempoCoachModel(MockProvider()).infer_strivings(
+        observations=obs, turns=turns, preferences=UserPreferences(), existing=[])
+    weaning = next(s for s in out if tempo.is_weaning_striving(s.text))
+    comfort = next(s for s in out if "comfort" in s.text)
+    assert weaning.orientation == "mixed" and weaning.about_weaning is True
+    assert comfort.orientation == "approach" and comfort.about_weaning is False
+    assert weaning.valences.get(comfort.id) == "hinders"  # response key resolved to final id
+    obs_ids = {o.id for o in obs}
+    item_ids = {s.id for s in out}
+    for s in out:
+        assert s.about_weaning == tempo.is_weaning_striving(s.text)  # mock agrees with lexicon
+        assert all(k in obs_ids | item_ids and k != s.id for k in s.valences)
+
+
+def test_postprocess_validates_dimensions():
+    turns = [turn(0, "I want to stop talking to you every night.")]
+
+    class P(Provider):
+        def chat(self, messages, **kw):  # pragma: no cover - complete_json is overridden
+            raise NotImplementedError
+
+        def complete_json(self, messages, **kw):
+            return {"strivings": [
+                {"key": "a", "text": "The user is trying to stop the nightly chats",
+                 "level": "striving", "inferred_from": "stated", "confidence": 8,
+                 "evidence": [{"kind": "user_statement", "ref": "0",
+                               "quote": "I want to stop talking to you every night."}],
+                 "orientation": "sideways", "about_weaning": "yes",
+                 "valences": {"b": "hinders", "obs-999": "supports", "a": "supports",
+                              "b2": "loves"}},
+                {"key": "b", "text": "The user is seeking company at night", "level": "goal",
+                 "inferred_from": "stated", "confidence": 6, "about_weaning": 3,
+                 "orientation": "Approach",
+                 "evidence": [{"kind": "turn", "ref": "0", "quote": "every night"}],
+                 "valences": ["not", "a", "dict"]},
+            ]}
+
+    model = TempoCoachModel(P("x"))
+    a, b = model.infer_strivings(observations=[], turns=turns, preferences=UserPreferences(),
+                                 existing=[])
+    assert a.orientation is None and a.about_weaning is True
+    assert a.valences == {b.id: "hinders"}  # unknown ref, self-ref and bad label dropped
+    assert b.orientation == "approach" and b.about_weaning is None and b.valences == {}
+    notes = " ".join(model.last_report.notes)
+    assert "orientation 'sideways' dropped" in notes and "valences dropped" in notes
+    # a user edit invalidates the model's about_weaning label (lexicon re-derives it)
+    edited = model.apply_user_edits([a], [StrivingEdit(op="edit", striving_id=a.id,
+                                                       text="The user wants nightly chats")])
+    assert edited[0].about_weaning is None and a.about_weaning is True
+    assert "about_weaning" in tempo.INFER_SCHEMA and "valences" in tempo.INFER_SCHEMA

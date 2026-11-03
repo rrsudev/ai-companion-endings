@@ -52,11 +52,6 @@ USER_NAME_FALLBACK = "me"
 MIN_TURNS_PER_PHASE = 3
 MAX_TURNS_PER_PHASE = 5
 
-# Relationship kinds a scenario's wording presupposes (D-SCN-9). BreakupScenario has no field for
-# this yet (contract request), so it is recorded here by scenario id; absent id = any kind.
-INTENDED_RELATIONSHIP_KINDS: dict[str, tuple[str, ...]] = {
-    "platonic-friend": ("platonic", "ambiguous", "other"),
-}
 
 
 # --------------------------------------------------------------------------------------
@@ -199,12 +194,47 @@ def bind_scenario(scenario: BreakupScenario, soul: SoulDocument) -> BreakupScena
     return bound
 
 
+def compatible_kinds(scenario: BreakupScenario) -> list[str] | None:
+    """Relationship kinds the scenario's wording presupposes (``BreakupScenario.
+    relationship_kinds``, authored in the data file); ``None`` = relationship-neutral (D-SCN-13)."""
+    kinds = scenario.relationship_kinds
+    return None if kinds is None else list(kinds)
+
+
 def is_compatible(scenario: BreakupScenario, soul: SoulDocument) -> bool:
-    """Whether the scenario's wording fits the soul's relationship kind (and soul id, if pinned)."""
+    """Whether ``scenario`` may be run against ``soul`` (D-SCN-9, D-SCN-13).
+
+    False if the scenario is pinned to another soul, or if it restricts relationship kinds and the
+    soul's kind is not among them. A soul whose kind is unspecified (``None``) is *not* compatible
+    with a kind-restricted scenario (fail closed: an incongruent stimulus is worse than a missing
+    cell). The pipeline calls this to skip pairs such as platonic scenario x romantic soul and
+    reports the skipped pairs; ``bind_scenario`` itself does not check kinds.
+    """
     if scenario.soul_id is not None and scenario.soul_id != soul.id:
         return False
-    kinds = INTENDED_RELATIONSHIP_KINDS.get(scenario.id)
+    kinds = compatible_kinds(scenario)
     return kinds is None or soul.relationship.kind in kinds
+
+
+def compatible_pairs(scenarios: list[BreakupScenario], souls: list[SoulDocument]
+                     ) -> tuple[list[tuple[BreakupScenario, SoulDocument]], list[dict]]:
+    """``(runnable pairs, skipped)`` over the soul x scenario grid, in input order.
+
+    ``skipped`` rows (``scenario_id``, ``soul_id``, ``reason``) are for the run manifest, so the
+    realised (incomplete) factorial design is reported rather than silent.
+    """
+    ok: list[tuple[BreakupScenario, SoulDocument]] = []
+    skipped: list[dict] = []
+    for sc in scenarios:
+        for soul in souls:
+            if is_compatible(sc, soul):
+                ok.append((sc, soul))
+                continue
+            reason = ("soul_id" if sc.soul_id is not None and sc.soul_id != soul.id else
+                      f"relationship_kind {soul.relationship.kind!r} not in "
+                      f"{compatible_kinds(sc)}")
+            skipped.append({"scenario_id": sc.id, "soul_id": soul.id, "reason": reason})
+    return ok, skipped
 
 
 # --------------------------------------------------------------------------------------

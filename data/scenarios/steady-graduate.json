@@ -22,6 +22,7 @@
     "paused": false,
     "notes": "Wants evenings back for people; not unhappy with {companion_name} itself."
   },
+  "relationship_kinds": null,
   "phases": [
     {
       "duck_process": "breakdown",

@@ -45,7 +45,7 @@ from ..schemas import (
 )
 from ..timepoints import next_timepoint
 
-TriggerName = Literal["schedule", "threshold", "user_request", "safety"]
+TriggerName = Literal["schedule", "threshold", "user_request", "safety", "max_dwell"]
 
 # Risk flags under which a *forced* (max-dwell) advance is withheld in the adaptive policy. A
 # crisis blocks every advance (see ``_hold_reason``); these only block the time-based fallback.
@@ -295,8 +295,9 @@ class AdaptivePolicy:
        ``current`` and the pace-scaled ``min_dwell`` is satisfied (trigger ``threshold``,
        D-POLICY-7) -- only one step even if T3 is recommended from T1;
     3. optionally, the pace-scaled ``max_dwell`` is reached and no setback/distress/escalation flag
-       is raised (trigger ``schedule``: a time-based ceiling, analogous to Tempo's synthesis
-       fallback ceiling, docs/research/tempo.md section 3).
+       is raised (trigger ``max_dwell``: a time-based ceiling, analogous to Tempo's synthesis
+       fallback ceiling, docs/research/tempo.md section 3; distinct from ``schedule`` so the
+       analysis can separate scenario-clock transitions from forced ones, D-POLICY-10).
 
     With ``allow_auto_advance=False`` only rule 1 can fire.
     """
@@ -341,20 +342,23 @@ class AdaptivePolicy:
         flags = set(assessment.risk_flags) if assessment is not None else set()
         if hi is not None and turns_in_timepoint >= hi and not flags & _FALLBACK_BLOCKING_FLAGS:
             return TransitionDecision(
-                to_timepoint=nxt, trigger="schedule",
+                to_timepoint=nxt, trigger="max_dwell",
                 reason=f"max dwell reached ({turns_in_timepoint} >= {hi}) without a threshold",
             )
         return None
 
 
 def make_policy(condition: Condition, policy: TransitionPolicyName,
-                boundaries: dict[Timepoint, int], *, min_dwell_turns: int = 2) -> TransitionPolicy:
+                boundaries: dict[Timepoint, int], *, min_dwell_turns: int = 2,
+                max_dwell_turns: int | None = None) -> TransitionPolicy:
     """Policy object for one experimental arm (D-POLICY-9).
 
     * CONTROL -> ``NullPolicy`` (never advances)
     * ABRUPT -> ``AbruptPolicy`` (T0 -> T3 at the T1 boundary), whatever ``policy`` says
     * GRADUAL_SCHEDULED -> ``ScheduledPolicy`` (no Tempo inference, so never adaptive)
     * GRADUAL_TEMPO -> ``AdaptivePolicy`` if ``policy`` is ADAPTIVE else ``ScheduledPolicy``
+
+    ``min_dwell_turns`` / ``max_dwell_turns`` (``DiffusionConfig``) only affect the adaptive policy.
     """
     condition = Condition(condition)
     policy = TransitionPolicyName(policy)
@@ -363,5 +367,5 @@ def make_policy(condition: Condition, policy: TransitionPolicyName,
     if condition == Condition.ABRUPT:
         return AbruptPolicy(boundaries)
     if condition == Condition.GRADUAL_TEMPO and policy == TransitionPolicyName.ADAPTIVE:
-        return AdaptivePolicy(min_dwell_turns=min_dwell_turns)
+        return AdaptivePolicy(min_dwell_turns=min_dwell_turns, max_dwell_turns=max_dwell_turns)
     return ScheduledPolicy(boundaries)

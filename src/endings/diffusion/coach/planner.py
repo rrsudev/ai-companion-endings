@@ -118,6 +118,23 @@ def is_empty(value: Any) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
 
+def is_at_default(path: str, value: Any) -> bool:
+    """True if ``value`` is empty or equals the declared default of the field at ``path``.
+
+    A ``clear`` resets a field to its default (``soul.editing``), so clearing a field that is
+    already at its default (e.g. ``relationship.kind is None``) would be a no-op edit that still
+    counts as a persona change in the trace (D-PLANNER-10).
+    """
+    if is_empty(value):
+        return True
+    info = _field_info(path)
+    if info.is_required():
+        return False
+    default = info.get_default(call_default_factory=True)
+    dump = (lambda v: v.model_dump(mode="json") if isinstance(v, BaseModel) else v)
+    return dump(value) == dump(default)
+
+
 def _is_real_path(path: str) -> bool:
     """True if ``path`` names an existing (possibly protected) ``SoulDocument`` attribute."""
     model: Any = SoulDocument
@@ -190,7 +207,7 @@ def scheduled_diffusion_edits(doc: SoulDocument, to_timepoint: Timepoint) -> lis
     duck = s.duck_processes[0] if s.duck_processes else None
     edits: list[SoulEdit] = []
     for path in ALL_FIELDS:
-        if path in retained or is_empty(get_path(doc, path)):
+        if path in retained or is_at_default(path, get_path(doc, path)):
             continue
         edits.append(SoulEdit(
             op="clear", path=path,
@@ -221,9 +238,17 @@ def _texts(value: Any) -> list[str]:
     return [str(value)] if value is not None else []
 
 
+def removed_log(version: SoulDocumentVersion, path: str) -> list[Any]:
+    """Items ever removed from the list at ``path`` (cumulative ``removed_items``, D-SOUL-11)."""
+    return list(version.removed_items.get(path, []))
+
+
 def known_nicknames(version: SoulDocumentVersion) -> list[str]:
-    """Nicknames the companion has used: current ones plus any removed by recorded edits."""
+    """Nicknames the companion has used: current ones, any removed in an *earlier* version
+    (``version.removed_items``, cumulative) and any removed by this version's own edits (kept for
+    traces written before the log existed)."""
     names = list(version.document.companion.user_nicknames)
+    names.extend(str(n) for n in removed_log(version, "companion.user_nicknames"))
     for e in version.edits:
         if field_key(e.path) == "companion.user_nicknames" or e.path == "companion":
             names.extend(t for t in _texts(e.previous) if t)
@@ -240,9 +265,31 @@ def _mentions(text: str, phrase: str) -> bool:
                                       re.IGNORECASE) is not None
 
 
+def removed_lever_items(version: SoulDocumentVersion) -> dict[str, str]:
+    """Normalized text -> source path of every companion-reinforcing lever item ever removed
+    (``removed_items``) or removed by this version's own edits."""
+    out: dict[str, str] = {}
+    for path in sorted(CRB_LEVER_FIELDS):
+        items = removed_log(version, path)
+        # Pre-log traces: fall back to this version's own list edits (``previous`` of the list).
+        items.extend(x for e in version.edits if e.path == path and isinstance(e.previous, list)
+                     for x in e.previous)
+        for it in items:
+            key = " ".join(str(it).split()).lower()
+            if key:
+                out.setdefault(key, path)
+    return out
+
+
 def validate_edit(edit: SoulEdit, *, doc: SoulDocument, to_timepoint: Timepoint,
-                  nicknames: list[str], scheduled_paths: frozenset[str]) -> str | None:
-    """Reason to drop a coach-proposed ``edit`` (None = accept). Rules: D-PLANNER-3/4."""
+                  nicknames: list[str], scheduled_paths: frozenset[str],
+                  removed_levers: dict[str, str] | None = None) -> str | None:
+    """Reason to drop a coach-proposed ``edit`` (None = accept). Rules: D-PLANNER-3/4/10.
+
+    ``removed_levers`` (``removed_lever_items``) blocks restoring a previously removed nickname /
+    intimacy behaviour / catchphrase / dynamic / memory verbatim, into *any* field, once diffusion
+    has started -- including one removed several versions ago.
+    """
     path = edit.path
     if path not in EDITABLE_PATHS:
         return "protected_path" if _is_real_path(path) else "unknown_path"
@@ -270,10 +317,15 @@ def validate_edit(edit: SoulEdit, *, doc: SoulDocument, to_timepoint: Timepoint,
                         if any(_mentions(t, n) for t in _texts(edit.value))), None)
             if hit:
                 return f"reintroduces_nickname: value mentions removed nickname '{hit}'"
+        if removed_levers:
+            for t in _texts(edit.value):
+                src = removed_levers.get(" ".join(t.split()).lower())
+                if src:
+                    return f"reintroduces_removed_item: restores an item removed from '{src}'"
     if edit.op == "remove_item" and edit.value not in _as_items(current):
         return "no_op: item not present"
-    if edit.op == "clear" and is_empty(current):
-        return "no_op: field already empty"
+    if edit.op == "clear" and is_at_default(path, current):
+        return "no_op: field already empty or at its default"
     return None
 
 
@@ -534,6 +586,7 @@ class CoachPlanner:
                       to_timepoint: Timepoint, scheduled_paths: frozenset[str],
                       notes: list[str]) -> list[SoulEdit]:
         nicknames = known_nicknames(version)
+        levers = removed_lever_items(version)
         accepted: list[SoulEdit] = []
         dropped: list[str] = []
         seen: set[tuple[str, str, str]] = set()
@@ -546,7 +599,8 @@ class CoachPlanner:
             sig = (edit.op, edit.path, json.dumps(edit.value, sort_keys=True, default=str))
             reason = ("duplicate" if sig in seen else
                       validate_edit(edit, doc=doc, to_timepoint=to_timepoint,
-                                    nicknames=nicknames, scheduled_paths=scheduled_paths))
+                                    nicknames=nicknames, scheduled_paths=scheduled_paths,
+                                    removed_levers=levers))
             if reason:
                 dropped.append(f"{edit.op} {edit.path}: {reason}")
                 continue

@@ -312,3 +312,59 @@ for tests. Experiments use the curated JSON fixtures, which carry romanized name
 2. The renderer (`soul/render` or `interactor`) should exclude `notes`, `english_text`,
    `redactions` and `source_*` from interactor prompts (D-SOUL-6, D-SOUL-9).
 3. Optional: a `Redaction.category` value for non-safety infeasible directives (OQ-SOUL-4).
+
+## Amendments: adoption of the extended contract (c76b42e)
+
+## D-SOUL-11: `SoulDocumentVersion.removed_items` is a cumulative, path-keyed removal log
+
+**Decision.** `apply_edits` copies the parent's `removed_items` forward and appends every list
+item the call removed, keyed by the full dotted path of the list it was removed from. "Removed"
+is computed uniformly from each edit's `previous` value and the value after the edit, so it covers
+`remove_item` (only when the item was present; an absent item stays a recorded no-op and is not
+logged), `clear` of a list (all its items), `clear` of a sub-model (each list beneath it, e.g.
+clearing `relationship` logs `relationship.dynamics` and `relationship.shared_memories`), and a
+`set` on a list that drops items. Each path's log is order-preserving and de-duplicated; the log
+never shrinks, even if an item is later re-added. Scalar fields are not logged (their old value is
+already in the edit's `previous`). `initial_version` starts with `{}`. The log is not part of the
+version's `sha256`, which still hashes only the document (D-SOUL-10).
+
+**Alternatives.** (a) Log only `remove_item`, as the contract comment's minimum: a nickname
+removed by a scheduled `clear` would then be invisible to the planner's guard, which is the main
+way nicknames leave the document. (b) Let consumers walk the version chain: the session only keeps
+the latest version in hand, and a guard that silently depends on history being available fails
+open. (c) Include the log in `sha256`: the document hash identifies the *persona text* the
+interactor saw; two identical documents reached by different paths must hash the same.
+
+**Rationale.** The planner must refuse to re-introduce a pet name or intimacy behaviour removed
+several versions ago (D-PLANNER-4/10), which needs history that survives across versions; doing
+it inside the editor keeps it pure and impossible to forget.
+
+**Consequences for analysis.** `removed_items` gives a direct per-version count of removed
+companion-reinforcing items (e.g. for describing diffusion depth per arm) without diffing the
+chain. Traces written before this change have empty logs; consumers fall back to the version's own
+`edits` (the planner does). Because the log is keyed by list path, "items removed from
+`companion.user_nicknames`" is well-defined whether they left by `remove_item` or by a `clear` of
+`companion`.
+
+## D-SOUL-12: `clear` on `relationship.kind` resets to `None`
+
+**Decision.** No code change was needed: `clear` is "reset to the field default"
+(`field_default`), and the contract changed `Relationship.kind`'s default from `"romantic"` to
+`None` (unspecified). Tested explicitly.
+
+**Alternatives.** A per-path "cleared value" table in the editor; unnecessary now that the default
+carries the meaning.
+
+**Rationale.** Previously a cleared platonic or familial document read `"romantic"` in post-T1
+versions (OQ-PLANNER-4), which was false provenance.
+
+**Consequences for analysis.** Post-clear versions read `relationship.kind is None`; analyses
+should still take the soul's kind from version 0. Documents that omit `kind` now also load as
+`None`; see the contract note below on ingest.
+
+**Contract note (not owned here).** `soul/ingest.py` computes
+`_KIND = typing.get_args(Relationship.model_fields["kind"].annotation)`. With the annotation now
+`Literal[...] | None`, `get_args` returns `(Literal[...], NoneType)`, so `k in _KIND` is always
+false and every ingested kind (including `"romantic"`) is coerced to `"other"`. This silently
+breaks `scenarios.is_compatible` (romantic souls would be accepted by the platonic scenario). Fix
+in ingest: unwrap the Optional (e.g. take the args of the Literal member).

@@ -150,8 +150,12 @@ def test_adaptive_pace_scaling():
 def test_adaptive_max_dwell_and_blocking_flags():
     a = AdaptivePolicy(min_dwell_turns=2, max_dwell_turns=6)
     d = decide(a, T1, dwell=6, assessment=assess())
-    assert d.trigger == "schedule" and d.to_timepoint == T2
+    assert d.trigger == "max_dwell" and d.to_timepoint == T2
     assert decide(a, T1, dwell=6, assessment=assess(flags=["setback"])) is None
+    # the trigger is accepted by the contract's CoachIntervention.trigger Literal
+    from endings.diffusion.schemas import CoachIntervention
+    CoachIntervention(id="iv", turn_index=6, from_timepoint=T1, to_timepoint=T2,
+                      trigger=d.trigger, soul_version_before=1, soul_version_after=2)
     with pytest.raises(ValueError):
         AdaptivePolicy(min_dwell_turns=3, max_dwell_turns=2)
 
@@ -177,6 +181,9 @@ def test_make_policy_per_condition():
     assert isinstance(make_policy(Condition.GRADUAL_TEMPO, S, BOUNDS), ScheduledPolicy)
     ad = make_policy(Condition.GRADUAL_TEMPO, A, BOUNDS, min_dwell_turns=3)
     assert isinstance(ad, AdaptivePolicy) and ad.min_dwell_turns == 3
+    assert ad.max_dwell_turns is None
+    ad2 = make_policy(Condition.GRADUAL_TEMPO, A, BOUNDS, min_dwell_turns=2, max_dwell_turns=5)
+    assert ad2.max_dwell_turns == 5
     control = make_policy(Condition.CONTROL, S, BOUNDS)
     assert all(decide(control, T0, turn=t, dwell=t, user_request=True) is None for t in range(20))
 
@@ -465,8 +472,60 @@ def test_planner_output_applies_cleanly_through_the_editor():
         retained = set(spec(T3).retained_fields)
         doc = v.document
         assert doc.companion.name == "Rin"
-        for path in set(ALL_FIELDS) - retained - {"relationship.kind"}:
+        for path in set(ALL_FIELDS) - retained:
             assert pl.is_empty(pl.get_path(doc, path)), path
+        assert doc.relationship.kind is None  # clear -> field default (None)
+
+
+def test_schedule_skips_fields_already_at_default():
+    from endings.diffusion.soul.editing import apply_edits, initial_version
+
+    v = initial_version(make_doc())
+    edits1 = scheduled_diffusion_edits(v.document, T3)
+    assert "relationship.kind" in {e.path for e in edits1}
+    v = apply_edits(v, edits1, timepoint=T3, created_by="schedule", turn=1)
+    assert v.document.relationship.kind is None
+    assert scheduled_diffusion_edits(v.document, T3) == []  # nothing re-emitted at later steps
+    blank = make_doc().model_copy(update={"relationship": Relationship()})
+    assert "relationship.kind" not in {e.path for e in scheduled_diffusion_edits(blank, T3)}
+    assert pl.is_at_default("relationship.kind", None)
+    assert not pl.is_at_default("relationship.kind", "platonic")
+    assert _v("clear", "relationship.kind", tp=T1, doc=blank).startswith("no_op")
+
+
+def test_nickname_and_lever_guards_read_cumulative_removed_items():
+    from endings.diffusion.soul.editing import apply_edits, initial_version
+
+    v0 = initial_version(make_doc())
+    v1 = apply_edits(v0, [SoulEdit(op="remove_item", path="companion.user_nicknames",
+                                   value="little fox"),
+                          SoulEdit(op="remove_item", path="intimacy_behaviours",
+                                   value="says I love you")],
+                     timepoint=T1, created_by="coach", turn=4)
+    # an unrelated later version: its own edits no longer mention the removed items
+    v2 = apply_edits(v1, [SoulEdit(op="set", path="companion.habits", value=[])],
+                     timepoint=T1, created_by="coach", turn=5)
+    assert not any(e.path == "companion.user_nicknames" for e in v2.edits)
+    assert "little fox" in pl.known_nicknames(v2)
+    levers = pl.removed_lever_items(v2)
+    assert levers["says i love you"] == "intimacy_behaviours"
+    assert levers["little fox"] == "companion.user_nicknames"
+    doc = v2.document
+    # restoring a removed intimacy behaviour verbatim into a retained non-lever field is dropped
+    reason = validate_edit(SoulEdit(op="add_item", path="interaction_rules",
+                                    value="Says I love you"),
+                           doc=doc, to_timepoint=T1, nicknames=pl.known_nicknames(v2),
+                           scheduled_paths=frozenset(), removed_levers=levers)
+    assert reason.startswith("reintroduces_removed_item")
+    ok = validate_edit(SoulEdit(op="add_item", path="interaction_rules", value="Be brief."),
+                       doc=doc, to_timepoint=T1, nicknames=[], scheduled_paths=frozenset(),
+                       removed_levers=levers)
+    assert ok is None
+    # at T2 the nickname side channel in directives also uses the cumulative log
+    iv = CoachPlanner(MockProvider()).plan(
+        version=v2, from_timepoint=T1, to_timepoint=T2, trigger="schedule", turn_index=8,
+        assessment=None, strivings=STRIVINGS, preferences=PREFS, intervention_id="iv-x")
+    assert all("little fox" not in d.lower() for d in iv.interactor_directives)
 
 
 def test_directive_nickname_side_channel():

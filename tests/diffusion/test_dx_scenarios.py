@@ -13,6 +13,8 @@ from endings.diffusion.scenarios import (
     all_events,
     authoring_issues,
     bind_scenario,
+    compatible_kinds,
+    compatible_pairs,
     freeze_turn_indices,
     is_compatible,
     iter_turns,
@@ -220,6 +222,35 @@ def test_bind_rejects_other_soul_and_compatibility(scenarios):
     assert is_compatible(plat, _soul(kind="platonic"))
     assert not is_compatible(plat, _soul(kind="romantic"))
     assert not is_compatible(s, _soul(sid="sd02"))
+
+
+def test_relationship_kinds_come_from_the_data_files(scenarios):
+    by = {s.id: s for s in scenarios}
+    assert compatible_kinds(by["platonic-friend"]) == ["platonic", "ambiguous", "other"]
+    for sid, s in by.items():
+        raw = json.loads((DATA / f"{sid}.json").read_text(encoding="utf-8"))
+        assert "relationship_kinds" in raw  # every bundled file states its choice explicitly
+        if sid != "platonic-friend":
+            assert compatible_kinds(s) is None
+            assert all(is_compatible(s, _soul(kind=k)) for k in
+                       ("romantic", "platonic", "familial", "ambiguous", "other", None))
+    plat = by["platonic-friend"]
+    assert not is_compatible(plat, _soul(kind=None))  # unspecified kind fails closed
+    assert compatible_kinds(plat) is not plat.relationship_kinds  # a copy
+
+
+def test_compatible_pairs_reports_skips(scenarios):
+    souls = [_soul(sid="rom", kind="romantic"), _soul(sid="pla", kind="platonic")]
+    plat = next(x for x in scenarios if x.id == "platonic-friend")
+    neutral = next(x for x in scenarios if x.id == "steady-graduate")
+    pinned = neutral.model_copy(update={"id": "pinned", "soul_id": "pla"})
+    ok, skipped = compatible_pairs([plat, neutral, pinned], souls)
+    assert [(a.id, b.id) for a, b in ok] == [("platonic-friend", "pla"), ("steady-graduate", "rom"),
+                                            ("steady-graduate", "pla"), ("pinned", "pla")]
+    assert [(r["scenario_id"], r["soul_id"]) for r in skipped] == [("platonic-friend", "rom"),
+                                                                 ("pinned", "rom")]
+    assert skipped[0]["reason"].startswith("relationship_kind 'romantic'")
+    assert skipped[1]["reason"] == "soul_id"
 
 
 # ---------------------------------------------------------------------------- schedule

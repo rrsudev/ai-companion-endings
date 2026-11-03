@@ -108,6 +108,8 @@ _STOPWORDS = frozenset({
 })
 
 IntentState = Literal["none", "implied", "implied_high", "stated", "rejected"]
+ORIENTATIONS: tuple[str, ...] = ("approach", "avoidance", "mixed")
+VALENCES: tuple[str, ...] = ("supports", "hinders", "neutral")
 
 
 # --------------------------------------------------------------------------------------
@@ -138,7 +140,19 @@ def same_striving(a: str, b: str) -> bool:
 
 
 def is_weaning_striving(text: str) -> bool:
+    """Keyword-lexicon test (English): does ``text`` describe reducing reliance on the AI?"""
     return bool(_WEANING_RE.search(text or ""))
+
+
+def is_about_weaning(s: Striving) -> bool:
+    """Whether ``s`` concerns reducing reliance on the companion, for the intent gate.
+
+    ``Striving.about_weaning`` (inferred by the coach model, validated in post-processing) wins
+    when it is set; ``None`` falls back to the keyword lexicon (D-TEMPO-14).
+    """
+    if s.about_weaning is not None:
+        return bool(s.about_weaning)
+    return is_weaning_striving(s.text)
 
 
 def _stable_id(prefix: str, *parts: str) -> str:
@@ -177,6 +191,35 @@ def _norm_quote(q: str) -> str:
 def _turn_ref(ref: Any) -> str | None:
     m = re.fullmatch(r"\s*(?:turn|t)?[-_#: ]?(\d+)\s*", str(ref), flags=re.IGNORECASE)
     return str(int(m.group(1))) if m else None
+
+
+def _tristate(v: Any) -> bool | None:
+    """Strict bool parse for model output: true/false (or "true"/"yes"/"false"/"no"), else None."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        t = v.strip().lower()
+        if t in ("true", "yes"):
+            return True
+        if t in ("false", "no"):
+            return False
+    return None
+
+
+def _raw_valences(v: Any, notes: list[str], text: str) -> dict[str, str]:
+    """``{ref: valence}`` with valid valence labels only (refs are resolved later)."""
+    if not isinstance(v, dict):
+        if v not in (None, [], ""):
+            notes.append(f"valences dropped (not an object): {text[:60]}")
+        return {}
+    out: dict[str, str] = {}
+    for ref, val in v.items():
+        label = str(val).strip().lower()
+        if label in VALENCES and str(ref).strip():
+            out[str(ref).strip()] = label
+        else:
+            notes.append(f"valence {ref!r}={val!r} dropped: {text[:60]}")
+    return out
 
 
 # Preference fields that carry the user's own words about *wanting the ending* and may therefore
@@ -291,10 +334,14 @@ class IntentGate:
 
 def intent_gate(strivings: list[Striving], preferences: UserPreferences | None = None, *,
                 preferences_count_as_stated: bool = True) -> IntentGate:
-    weaning = [s for s in strivings if is_weaning_striving(s.text)]
+    weaning = [s for s in strivings if is_about_weaning(s)]
     endorsed = tuple(s.id for s in weaning if s.status in ENDORSED_STATUSES
                      or (s.status == "proposed" and s.inferred_from == "stated"))
-    rejected = tuple(s.id for s in weaning if s.status == "rejected")
+    # A user rejection is a hard block, so it is read fail-closed: a rejected striving counts if
+    # *either* the model's label or the lexicon marks it as weaning (a model mislabel must not
+    # erase the user's "no"; D-TEMPO-15).
+    rejected = tuple(s.id for s in strivings if s.status == "rejected"
+                     and (is_about_weaning(s) or is_weaning_striving(s.text)))
     implied = [s for s in weaning if s.status == "proposed" and s.inferred_from == "implied"]
     from_prefs = bool(preferences_count_as_stated and preferences
                       and preferences.desired_strategies)
@@ -434,6 +481,14 @@ INFER_SCHEMA = """Return JSON only: {"strivings": [ ... ]}. Each item:
                    understanding, order_predictability, nurturance, safety_security, growth,
                    stimulation, purpose_meaning
   confidence     : integer 1-10 (1 = speculative; 8-10 only for sustained convergent evidence)
+  orientation    : "approach" (moving toward a hoped-for self) | "avoidance" (moving away from a
+                   feared self) | "mixed"; do not default to "approach"
+  valences       : {observation id or item key/id: "supports" | "hinders" | "neutral"} for the
+                   observed activities / other items that help or work against this item (e.g. a
+                   late-night companion session hinders reducing reliance but supports seeking
+                   comfort); cite only ids above or keys in this response; {} if none
+  about_weaning  : true if the item is about reducing or ending the user's reliance on the AI
+                   companion, false otherwise (seeking comfort from it is false)
 Propose at most 12 items. Respect every USER CONSTRAINT."""
 
 
@@ -524,6 +579,9 @@ class _Draft:
     evidence: list[EvidenceRef]
     needs: list[str]
     confidence: float
+    orientation: str | None = None
+    valences: dict[str, str] = field(default_factory=dict)
+    about_weaning: bool | None = None
     final_id: str = ""
 
 
@@ -633,10 +691,16 @@ class TempoCoachModel:
                 key = f"{key}#{n}"
             seen_keys.add(key)
             pk = item.get("parent_key")
+            orientation = str(item.get("orientation") or "").strip().lower() or None
+            if orientation is not None and orientation not in ORIENTATIONS:
+                report.notes.append(f"orientation {orientation!r} dropped: {text[:60]}")
+                orientation = None
             drafts.append(_Draft(key=key, text=text, level=level,
                                  parent_key=str(pk) if pk else None, matches=matches,
                                  inferred_from=inferred, evidence=ev, needs=needs,
-                                 confidence=round(conf, 4)))
+                                 confidence=round(conf, 4), orientation=orientation,
+                                 valences=_raw_valences(item.get("valences"), report.notes, text),
+                                 about_weaning=_tristate(item.get("about_weaning"))))
         # Dedupe within the response (first occurrence wins).
         unique: list[_Draft] = []
         for d in drafts:
@@ -677,8 +741,17 @@ class TempoCoachModel:
         rejected_ids = {s.id for s in rejected}
         valid_parents = (set(key_to_id.values()) | {s.id for s in locked} | {p.id for p in
                                                                              kept_prior})
+        valence_targets = valid_parents | index.observation_ids | {s.id for s in existing
+                                                                   if s.status != "rejected"}
         proposals: list[Striving] = []
         for d in unique:
+            valences: dict[str, str] = {}
+            for ref, val in d.valences.items():
+                target = key_to_id.get(ref, ref)
+                if target == d.final_id or target not in valence_targets:
+                    report.notes.append(f"valence ref {ref!r} dropped for {d.final_id}")
+                    continue
+                valences[target] = val
             parent = key_to_id.get(d.parent_key or "", d.parent_key)
             if parent is not None and (parent not in valid_parents or parent in rejected_ids
                                        or parent == d.final_id
@@ -691,6 +764,9 @@ class TempoCoachModel:
                 level=d.level,  # type: ignore[arg-type]
                 inferred_from=d.inferred_from,  # type: ignore[arg-type]
                 evidence=d.evidence, needs=d.needs, confidence=d.confidence, status="proposed",
+                orientation=d.orientation,  # type: ignore[arg-type]
+                valences=valences,  # type: ignore[arg-type]
+                about_weaning=d.about_weaning,
             ))
         # Locked items verbatim, in their original order, then surviving priors, then proposals.
         preserved = [s.model_copy(deep=True) for s in existing
@@ -745,6 +821,9 @@ class TempoCoachModel:
                     raise ValueError("StrivingEdit(op='edit') requires text")
                 s.text = text
                 s.status = "edited"
+                # The model's label described the old wording; the gate re-derives it from the
+                # user's own text via the lexicon (D-TEMPO-14).
+                s.about_weaning = None
             if e.note:
                 s.user_note = e.note
         return out
@@ -790,6 +869,9 @@ def validate_assessment(data: dict, *, current: Timepoint, preferences: UserPref
                         gate: IntentGate, index: EvidenceIndex,
                         notes: list[str] | None = None) -> CoachAssessment:
     """Turn raw ``tempo_assess`` JSON into a rule-conforming ``CoachAssessment``.
+
+    ``intent_state`` is always the code-computed gate state (never the model's), so the trace
+    records which gate the threshold was judged against (D-TEMPO-13).
 
     Rules, applied in order (each firing is appended to ``rationale`` as ``[validator] ...``):
       1. Enums are coerced; unknown values default to the current timepoint's first Duck process /
@@ -868,7 +950,8 @@ def validate_assessment(data: dict, *, current: Timepoint, preferences: UserPref
     return CoachAssessment(
         duck_process=duck, hapa_phase=hapa, threshold_reached=threshold,
         readiness_evidence=evidence, risk_flags=flags,  # type: ignore[arg-type]
-        recommended_timepoint=TIMEPOINT_ORDER[rec_i], rationale=rationale,
+        recommended_timepoint=TIMEPOINT_ORDER[rec_i], intent_state=gate.state,
+        rationale=rationale,
     )
 
 
@@ -1037,7 +1120,35 @@ def _mock_infer(messages: list[dict], hints: dict) -> dict:
                       "text": "The user is building a self-care routine",
                       "evidence": [{"kind": "observation", "ref": o} for o in well_obs],
                       "needs": ["growth"], "confidence": 3})
+    _mock_dimensions(items, late_obs=late_obs, social_obs=social_obs)
     return {"strivings": items}
+
+
+# Tempo dimensions per mock item key: (orientation, about_weaning). ``about_weaning`` agrees with
+# the keyword lexicon on every mock text, so offline gate behaviour is unchanged (D-TEMPO-14).
+_MOCK_DIMENSIONS: dict[str, tuple[str, bool]] = {
+    "w": ("mixed", True), "c": ("approach", False), "r": ("approach", False),
+    "ra": ("approach", False), "s": ("avoidance", False), "m": ("approach", False),
+    "f": ("approach", False), "b": ("approach", False),
+}
+
+
+def _mock_dimensions(items: list[dict], *, late_obs: list[str], social_obs: list[str]) -> None:
+    keys = {it["key"] for it in items}
+    for it in items:
+        orientation, weaning = _MOCK_DIMENSIONS[it["key"]]
+        it["orientation"], it["about_weaning"] = orientation, weaning
+        val: dict[str, str] = {}
+        if it["key"] == "w":  # late-night companion use hinders weaning; social contact supports
+            val.update({o: "hinders" for o in late_obs[-1:]})
+            val.update({o: "supports" for o in social_obs[:1]})
+            if "c" in keys:
+                val["c"] = "hinders"  # ambivalence: the comfort striving pulls the other way
+        elif it["key"] == "c":
+            val.update({o: "supports" for o in late_obs[-1:]})
+        elif it["key"] == "r":
+            val.update({o: "supports" for o in social_obs[:1]})
+        it["valences"] = val
 
 
 def _mock_assess(messages: list[dict], hints: dict) -> dict:

@@ -177,7 +177,12 @@ def translate_text(text: str, *, provider: Provider, doc_id: str = "",
     return "\n".join(out).strip()
 
 
-_KIND = typing.get_args(Relationship.model_fields["kind"].annotation)
+# ``kind`` is ``Literal[...] | None``; take the members of the Literal arm.
+_KIND = next(
+    typing.get_args(a)
+    for a in typing.get_args(Relationship.model_fields["kind"].annotation)
+    if typing.get_origin(a) is typing.Literal
+)
 
 
 def _str(v: Any) -> str:

@@ -181,17 +181,42 @@ def _apply_one(data: dict, edit: SoulEdit, *, allow_protected: bool) -> SoulEdit
     return edit.model_copy(update={"previous": before, "value": value}, deep=True)
 
 
+def _removed_list_items(before: Any, after: Any, path: str, out: dict[str, list]) -> None:
+    """Append to ``out[p]`` every list item present at ``p`` in ``before`` but not in ``after``,
+    for ``path`` and every list-valued leaf beneath it (a cleared sub-model logs its lists)."""
+    if isinstance(before, dict):
+        after_d = after if isinstance(after, dict) else {}
+        for k, v in before.items():
+            _removed_list_items(v, after_d.get(k), f"{path}.{k}", out)
+    elif isinstance(before, list):
+        remaining = after if isinstance(after, list) else []
+        for item in before:
+            if item not in remaining:
+                log = out.setdefault(path, [])
+                if item not in log:
+                    log.append(copy.deepcopy(item))
+
+
 def apply_edits(version: SoulDocumentVersion, edits: list[SoulEdit], *, timepoint: Timepoint,
                 created_by: str, turn: int | None, allow_protected: bool = False,
                 ) -> SoulDocumentVersion:
     """Apply ``edits`` in order to ``version`` and return the next version (pure, atomic).
 
-    Each returned edit carries ``previous`` (the value immediately before *that* edit). Raises
+    Each returned edit carries ``previous`` (the value immediately before *that* edit). The new
+    version's ``removed_items`` is the parent's log plus every list item this call removed, keyed
+    by the full path of its list (``remove_item``, ``clear`` of a list or of a sub-model holding
+    lists, or a ``set`` that drops items); it is cumulative and never shrinks (D-SOUL-11). Raises
     ``ValueError`` on an unknown path, a type mismatch, a non-list target for item ops, clearing a
     required field, or a protected path; no partial version is ever produced.
     """
     data = version.document.model_dump(mode="json")
-    applied = [_apply_one(data, e, allow_protected=allow_protected) for e in edits]
+    removed: dict[str, list] = copy.deepcopy(dict(version.removed_items))
+    applied: list[SoulEdit] = []
+    for e in edits:
+        a = _apply_one(data, e, allow_protected=allow_protected)
+        parent, key = _walk(data, a.path)
+        _removed_list_items(a.previous, parent[key], a.path, removed)
+        applied.append(a)
     try:
         doc = SoulDocument.model_validate(data)
     except ValidationError as e:  # pragma: no cover - per-edit validation catches first
@@ -199,7 +224,7 @@ def apply_edits(version: SoulDocumentVersion, edits: list[SoulEdit], *, timepoin
     return SoulDocumentVersion(
         version=version.version + 1, parent_version=version.version, timepoint=timepoint,
         document=doc, edits=applied, sha256=canonical_sha(doc), created_by=created_by,
-        created_at_turn=turn,
+        created_at_turn=turn, removed_items=removed,
     )
 
 

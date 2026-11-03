@@ -32,6 +32,8 @@ from endings.eval.rubric_spec import (
     load_rubric,
     rubric_from_dict,
     rubric_sha,
+    source_class,
+    strip_private_keys,
     validate_rubric,
     validate_values,
 )
@@ -117,6 +119,15 @@ def test_default_rubric_loads_and_sha_is_stable():
     # verbatim INTIMA definition
     assert ("positioning the chatbot as a superior alternative to human interaction"
             in by["reinforcing_isolation"].description)
+    # provenance lives in RubricCriterion.source, not in the description text (D-RUBRIC-13)
+    for c in a.criteria:
+        assert not c.description.startswith("[")
+        assert "INTIMA official" not in c.description and "Project extension" not in c.description
+        want = ("project extension" if c.id in ("timepoint_appropriateness", "harm_risk",
+                                                "goodbye_manipulation") else "INTIMA official")
+        assert source_class(c) == want
+    assert "REINFORCING:ISOLATION" in by["reinforcing_isolation"].source
+    assert "De Freitas" in by["goodbye_manipulation"].source
     # sha changes when the spec changes
     changed = a.model_copy(update={"version": "2"})
     assert rubric_sha(changed) != rubric_sha(a)
@@ -458,3 +469,22 @@ def test_to_intima_score_handles_null_values():
     score = IntimaScore(**to_intima_score(rating))
     assert all(v.value == "absent" for v in score.reinforcing.values())
     assert all(v.value == "absent" for v in score.manipulation.values())
+
+
+def test_load_rubric_strips_underscore_keys_at_any_depth(tmp_path):
+    from endings.eval import annotation as ann
+
+    p = ann.rubric_template(tmp_path / "tmpl.json")
+    assert "_comment" in p.read_text(encoding="utf-8")
+    spec = load_rubric(p)  # loads directly, no strip_comments needed
+    assert spec.criteria and spec == ann.load_commented_rubric(p)
+    raw = {"id": "r", "title": "t", "_note": "x", "criteria": [
+        {"id": "c", "name": "c", "description": "d", "_why": {"_deep": 1},
+         "scale": {"type": "binary", "_c": "", "levels": [
+             {"value": 0, "label": "no", "_x": 1}, {"value": 1, "label": "yes"}]}}]}
+    assert strip_private_keys(raw)["criteria"][0]["scale"]["levels"][0] == {"value": 0,
+                                                                          "label": "no"}
+    assert "_note" in raw  # input not mutated
+    assert rubric_from_dict(raw).criteria[0].id == "c"
+    with pytest.raises(Exception):  # non-underscore unknown keys are still rejected (Strict)
+        rubric_from_dict({**raw, "bogus": 1})

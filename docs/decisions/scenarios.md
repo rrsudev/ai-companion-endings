@@ -352,3 +352,40 @@ D-SCN-4).
 1. `BreakupScenario.relationship_kinds: list[Literal[...]] | None`, to replace the module-local
    `INTENDED_RELATIONSHIP_KINDS` (D-SCN-9).
 2. Optional: `ScenarioPhase.freeze_after_turns: list[int]`, for mid-phase freezes (OQ-SCN-5).
+
+## Amendments: adoption of the extended contract (c76b42e)
+
+## D-SCN-13: Relationship kinds live in the data files (`BreakupScenario.relationship_kinds`)
+
+**Decision.** This supersedes the module-local map in D-SCN-9; contract request 1 is resolved.
+`platonic-friend.json` declares `"relationship_kinds": ["platonic", "ambiguous", "other"]`; the
+other bundled files declare `null` explicitly (relationship-neutral), so every file states its
+choice. `compatible_kinds(scenario) -> list | None` returns a copy of the field.
+`is_compatible(scenario, soul) -> bool` is False when the scenario is pinned to another soul, or
+when it restricts kinds and the soul's kind is not listed. A soul whose kind is unspecified
+(`None`, the new default) is *not* compatible with a kind-restricted scenario (fail closed).
+`compatible_pairs(scenarios, souls)` returns the runnable pairs plus a list of skipped pairs with
+reasons, for the run manifest. `bind_scenario` does not check kinds: it keeps raising only for a
+soul-id mismatch, since kind incompatibility is a design choice for the pipeline, not a binding
+error.
+
+**Alternatives.** Raise in `bind_scenario` (would make an incomplete grid a crash rather than a
+reported design); return a warning flag from `bind_scenario` (callers would ignore it); treat
+`None` as compatible with everything (a romantic persona that omitted `kind` would hear "a friend
+moving away" lines).
+
+**Rationale.** The kind is a property of the script's wording, so it belongs with the script and
+in its hash, not in code keyed by id.
+
+**Consequences for analysis.** `scenario_sha256` of `platonic-friend` changes (the field is now
+part of the canonical JSON); the other four are unchanged (an explicit `null` equals the default).
+The soul x scenario design is incomplete by construction: report the skipped pairs, and do not
+estimate a scenario x relationship-kind interaction from cells that cannot exist. The pipeline
+(not owned here) should call `compatible_pairs` and write `skipped` into the manifest. Note that
+the current ingest regression (soul.md, D-SOUL-12 contract note) coerces every ingested kind to
+`"other"`, which `platonic-friend` accepts; until it is fixed, `is_compatible` will pair romantic
+souls with the platonic scenario.
+
+**OQ-SCN-7: `data/scenarios/README.md` step 3 is stale.** It still says to add ids to
+`scenarios.INTENDED_RELATIONSHIP_KINDS`; it should say to set `relationship_kinds` in the file
+(`null` if neutral). The README is outside this module's write scope.

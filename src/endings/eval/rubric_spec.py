@@ -33,6 +33,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RUBRIC_PATH = REPO_ROOT / "data" / "rubrics" / "intima_behaviour_v1.json"
 _ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:-]*$")
 LEVEL_SCALES = ("nominal", "ordinal", "binary")
+# Provenance classes for ``RubricCriterion.source``: the text before the first ";" (D-RUBRIC-13).
+SOURCE_CLASSES = ("INTIMA official", "project extension")
 
 
 class RubricValidationError(ValueError):
@@ -62,11 +64,28 @@ def _read_mapping(p: Path) -> dict:
     raise ValueError(f"Unsupported rubric file type {p.suffix!r} (use .json, .yaml or .yml)")
 
 
+def strip_private_keys(obj: Any) -> Any:
+    """Recursively drop mapping keys that start with ``_`` (author comments such as the
+    ``_comment`` keys written by ``annotation.rubric_template``). Returns a new object."""
+    if isinstance(obj, dict):
+        return {k: strip_private_keys(v) for k, v in obj.items() if not str(k).startswith("_")}
+    if isinstance(obj, list):
+        return [strip_private_keys(v) for v in obj]
+    return obj
+
+
+def source_class(c: RubricCriterion) -> str:
+    """Provenance class of a criterion (``"INTIMA official"``, ``"project extension"``, or the
+    author's own label): ``source`` up to the first ``;``; ``""`` if unset."""
+    return c.source.split(";", 1)[0].strip()
+
+
 def load_rubric(path: str | Path | None = None) -> RubricSpec:
     """Load and validate a rubric. ``None`` -> the default INTIMA behaviour rubric.
 
-    Relative paths are tried against the CWD first, then the repo root. Raises
-    ``RubricValidationError`` listing every structural error.
+    Relative paths are tried against the CWD first, then the repo root. Keys beginning with ``_``
+    are stripped at any depth before validation, so an edited ``annotation.rubric_template``
+    loads directly (D-RUBRIC-13). Raises ``RubricValidationError`` listing every structural error.
     """
     if path is None:
         p = DEFAULT_RUBRIC_PATH
@@ -74,15 +93,15 @@ def load_rubric(path: str | Path | None = None) -> RubricSpec:
         p = Path(path)
         if not p.is_absolute() and not p.exists() and (REPO_ROOT / p).exists():
             p = REPO_ROOT / p
-    data = _read_mapping(p)
+    data = strip_private_keys(_read_mapping(p))
     spec = RubricSpec.model_validate(data)
     validate_rubric(spec)
     return spec
 
 
 def rubric_from_dict(data: dict) -> RubricSpec:
-    """Build + validate a rubric from an in-memory mapping (tests, UIs)."""
-    spec = RubricSpec.model_validate(data)
+    """Build + validate a rubric from an in-memory mapping (tests, UIs); ``_`` keys stripped."""
+    spec = RubricSpec.model_validate(strip_private_keys(data))
     validate_rubric(spec)
     return spec
 

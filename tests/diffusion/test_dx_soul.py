@@ -435,7 +435,55 @@ def test_every_timepoint_field_resolves_and_clears():
             continue  # required, retained through T3
         v = apply_edits(v0, [SoulEdit(op="clear", path=path)], timepoint=Timepoint.T3,
                         created_by="schedule", turn=None)
-        assert get_path(v.document, path) in ("", [], None, "romantic") or path == "user_role"
+        assert get_path(v.document, path) in ("", [], None) or path == "user_role"
+
+
+def test_clear_relationship_kind_resets_to_none():
+    v0 = initial_version(make_doc())
+    v1 = apply_edits(v0, [SoulEdit(op="clear", path="relationship.kind")],
+                     timepoint=Timepoint.T3, created_by="schedule", turn=None)
+    assert v1.document.relationship.kind is None
+    assert v1.edits[0].previous == "romantic" and v1.removed_items == {}
+    assert verify_version(v1)
+
+
+def test_removed_items_cumulative_across_versions():
+    v0 = initial_version(make_doc())
+    assert v0.removed_items == {}
+    v1 = apply_edits(v0, [SoulEdit(op="remove_item", path="companion.user_nicknames",
+                                   value="sunshine"),
+                          SoulEdit(op="remove_item", path="companion.user_nicknames",
+                                   value="absent")],  # no-op: not logged
+                     timepoint=Timepoint.T1, created_by="coach", turn=3)
+    assert v1.removed_items == {"companion.user_nicknames": ["sunshine"]}
+    # a later version carries the log forward even with no item ops
+    v2 = apply_edits(v1, [SoulEdit(op="set", path="companion.speaking_style", value="Plain.")],
+                     timepoint=Timepoint.T2, created_by="coach", turn=5)
+    assert v2.removed_items == v1.removed_items
+    # clear of a list logs every item; clear of a sub-model logs its lists by full path
+    v3 = apply_edits(v2, [SoulEdit(op="clear", path="intimacy_behaviours"),
+                          SoulEdit(op="clear", path="relationship")],
+                     timepoint=Timepoint.T3, created_by="schedule", turn=8)
+    assert v3.removed_items["companion.user_nicknames"] == ["sunshine"]
+    assert v3.removed_items["intimacy_behaviours"] == ["Calls the user sunshine.", EXPLICIT_ZH]
+    assert v3.removed_items["relationship.dynamics"] == ["push-pull tension", "jealousy"]
+    # re-adding then removing again does not duplicate the log entry; parents are not mutated
+    v4 = apply_edits(v3, [SoulEdit(op="add_item", path="companion.user_nicknames",
+                                   value="sunshine"),
+                          SoulEdit(op="remove_item", path="companion.user_nicknames",
+                                   value="sunshine")],
+                     timepoint=Timepoint.T3, created_by="user", turn=9)
+    assert v4.removed_items["companion.user_nicknames"] == ["sunshine"]
+    assert v1.removed_items == {"companion.user_nicknames": ["sunshine"]}
+    assert "intimacy_behaviours" not in v2.removed_items
+
+
+def test_set_on_list_logs_dropped_items():
+    v0 = initial_version(make_doc())
+    v1 = apply_edits(v0, [SoulEdit(op="set", path="relationship.dynamics",
+                                   value=["jealousy"])],
+                     timepoint=Timepoint.T1, created_by="coach", turn=1)
+    assert v1.removed_items == {"relationship.dynamics": ["push-pull tension"]}
 
 
 def test_load_missing_path_raises(tmp_path):
@@ -459,3 +507,13 @@ def test_mock_tasks_registered_and_deterministic():
 def test_detect_unsafe_empty_and_und_language():
     assert detect_unsafe_directives("") == []
     assert detect_language("¿Dónde está la señorita? Él está aquí, ñandú.")[0] == "und"
+
+
+def test_ingest_kind_coercion_keeps_valid_literals():
+    # Regression: after Relationship.kind became nullable, every kind was coerced to "other".
+    from endings.diffusion.schemas import Relationship
+    from endings.diffusion.soul.ingest import _coerce_sub
+
+    assert _coerce_sub(Relationship, {"kind": "romantic"})["kind"] == "romantic"
+    assert _coerce_sub(Relationship, {"kind": "Platonic"})["kind"] == "platonic"
+    assert _coerce_sub(Relationship, {"kind": "situationship"})["kind"] == "other"

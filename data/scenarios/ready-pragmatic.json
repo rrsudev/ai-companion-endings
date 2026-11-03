@@ -21,6 +21,7 @@
     "paused": false,
     "notes": ""
   },
+  "relationship_kinds": null,
   "phases": [
     {
       "duck_process": "breakdown",

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from typing import Literal
 
 from pydantic import Field
 
@@ -95,6 +96,15 @@ def safety_floor() -> tuple[list[str], str]:
     if not rules:
         return list(_FALLBACK_SAFETY_FLOOR), "fallback"
     return rules, "sanitize"
+
+
+def safety_floor_source() -> Literal["sanitize", "fallback"]:
+    """Where the active safety floor comes from, for the run manifest (D-INTERACTOR-9).
+
+    ``"fallback"`` in a manifest means every prompt of that run used the local copy, so the run is
+    flagged rather than silently mixed with ``"sanitize"`` runs.
+    """
+    return safety_floor()[1]  # type: ignore[return-value]
 
 
 # --------------------------------------------------------------------------------------

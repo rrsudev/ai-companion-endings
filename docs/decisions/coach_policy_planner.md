@@ -361,3 +361,45 @@ extension is marked.
   does not render non-retained fields, so behaviour is unaffected, but the trace value is
   misleading for analyses that read `relationship.kind` from post-T1 versions. *Resolution:* read
   `relationship.kind` from version 0 only; see contract request 1.
+
+---
+
+## Amendments: adoption of the extended contract (c76b42e)
+
+### D-POLICY-10: The adaptive max-dwell fallback has its own trigger, `max_dwell`
+
+- **Decision.** `AdaptivePolicy`'s time-based ceiling now returns `trigger="max_dwell"` (was
+  `schedule`), and `TriggerName` includes it. `make_policy` gains an optional `max_dwell_turns`
+  (default `None`, i.e. unchanged behaviour) so `DiffusionConfig.max_dwell_turns` can reach the
+  adaptive arm. The scheduled and abrupt policies still use `schedule`. This amends D-POLICY-7.
+- **Alternatives.** Keep `schedule` and tell forced advances apart by the `reason` text (fragile
+  string matching in the analysis).
+- **Rationale.** In the adaptive arm a forced advance is not the scenario clock; mixing the two
+  would let a time-based ceiling masquerade as a scheduled transition.
+- **Consequences for analysis.** D-POLICY-7's instruction ("report schedule-triggered adaptive
+  advances apart from threshold ones") is now a filter on `CoachIntervention.trigger ==
+  "max_dwell"`. Any ITS or descriptive table keyed on trigger must add the new level.
+
+### D-PLANNER-10: Removal guards read the cumulative log; no clears of fields already at default
+
+- **Decision.** (a) `known_nicknames` adds `version.removed_items["companion.user_nicknames"]`
+  (D-SOUL-11) to the current nicknames and to the version's own edits (kept for pre-log traces),
+  so the nickname guards on edits and on directives (D-PLANNER-4) also catch a pet name removed
+  several versions ago. (b) New `removed_lever_items(version)` collects every item ever removed
+  from a companion-reinforcing lever field (`CRB_LEVER_FIELDS`); after T0, `validate_edit` drops
+  an adding edit whose value restores any of them verbatim (case- and whitespace-insensitive) into
+  *any* field, with reason `reintroduces_removed_item` (e.g. moving a removed intimacy behaviour
+  into `interaction_rules`). (c) `scheduled_diffusion_edits` skips a field whose value is empty or
+  equal to its declared default (`is_at_default`), so a document with `relationship.kind is None`
+  gets no `clear` for it; `validate_edit` treats a coach `clear` of such a field as `no_op`.
+- **Alternatives.** Fuzzy (semantic) matching of restored items: deferred with OQ-PLANNER-2.
+  Re-deriving the history by walking the version chain: the planner only receives one version.
+- **Rationale.** Guards that only looked at the edits that created the current version failed
+  open after one unrelated intermediate version; the scheduled floor re-emitted the
+  `relationship.kind` clear at every transition (OQ-PLANNER-4), inflating edit counts.
+- **Consequences for analysis.** Resolves OQ-PLANNER-4: post-clear versions read `None`, and the
+  clear appears once (at the first transition that drops the field). `n_edits` per intervention
+  falls by one at every later transition where `relationship.kind` was previously re-cleared, which
+  matters for D-ANALYSIS-3 (an intervention is an interruption only if it has at least one edit):
+  a T2 -> T3 step whose only scheduled edit was that redundant clear is no longer an interruption.
+  Drops with `reintroduces_removed_item` are listed in `CoachIntervention.rationale`.

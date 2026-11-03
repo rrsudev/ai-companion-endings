@@ -334,3 +334,63 @@ reduce use; virtuous-sounding strivings may be accepted uncritically. *Why:* bot
 "weaning" outcomes. *Resolve:* in any human study, show evidence next to each striving (already
 available via `evidence`), offer "this is not what I want", and include a planted false striving
 as a manipulation check (IRB-dependent).
+
+## Amendments: adoption of the extended contract (c76b42e)
+
+## D-TEMPO-13: `CoachAssessment.intent_state` is the code-computed gate state
+**Decision.** `validate_assessment` sets `intent_state = gate.state` on every assessment it
+returns. Any `intent_state` in the model's JSON is ignored.
+**Alternatives.** Let the model report its own reading of intent (it is shown the computed state
+in the prompt, so it would only be able to disagree, and disagreement must not move the gate).
+**Rationale.** The trace must say which gate the threshold decision was judged against; until now
+that was only in `TempoReport.gate`, which the session does not persist.
+**Consequences for analysis.** Per-assessment intent states can be tabulated directly from
+`CoachIntervention.assessment` (e.g. how often a model-claimed threshold was suppressed under
+`implied_high`), and suppressions can be audited without parsing `[validator]` rationale text.
+
+## D-TEMPO-14: Tempo dimensions on strivings; `about_weaning` takes precedence over the lexicon
+**Decision.** The inference schema asks for `orientation` (approach / avoidance / mixed, "do not
+default to approach", as in Tempo), `valences` (`{ref: supports|hinders|neutral}`, Tempo's
+`action_valences`) and `about_weaning` (bool). Post-processing validates them: unknown
+orientations become `None`; valence labels outside the three values and non-object valences are
+dropped; valence refs must be an observation id, an existing non-rejected striving id, or a key /
+id in the same response (keys are resolved to final ids; self-references are dropped);
+`about_weaning` accepts only booleans or "true"/"yes"/"false"/"no", else `None`. Each drop is noted
+in `TempoReport.notes`. The intent gate classifies a striving as weaning by `is_about_weaning(s)`:
+`s.about_weaning` when not `None`, else the keyword lexicon. A user `edit` resets `about_weaning`
+to `None` (the model's label described the old wording), and user-added items keep `None`, so
+user-authored text is always classified by the lexicon. The offline mock emits all three fields;
+its `about_weaning` labels agree with the lexicon on every mock text, so offline gate behaviour is
+unchanged (tested).
+**Alternatives.** Lexicon only (OQ-TEMPO-5: fails closed on unseen phrasings); model label only
+(no fallback for older traces or user edits); require lexicon *and* model to agree (doubles the
+fail-closed problem).
+**Rationale.** Resolves OQ-TEMPO-3 (valences now exist in the contract) and OQ-TEMPO-5 (explicit
+`about_weaning`). The gate stays safe because `about_weaning=True` only *classifies* a striving;
+crossing a threshold still requires stated (verified-quote) or user-endorsed intent (D-TEMPO-10).
+**Consequences for analysis.** With a real coach, the gate may open on weaning strivings the
+lexicon would miss, or close on ones it would catch (`about_weaning=False`). Report the
+lexicon-vs-label agreement on the annotation set and run the lexicon-only gate as a sensitivity
+analysis (set the field to `None` before gating). Valences are recorded but not yet consumed by
+the planner (see OQ-TEMPO-9).
+
+**OQ-TEMPO-9: Use of valences downstream.** The planner could ground directives in activities
+that *support* an endorsed striving or flag ones that *hinder* it. *Why:* without a consumer, the
+field is descriptive only. *Resolve:* decide with the planner owner whether to expose valences in
+the `coach_plan` context, and evaluate whether directives grounded in them are rated as less
+generic.
+
+## D-TEMPO-15: Rejections of weaning strivings are read fail-closed (amends D-TEMPO-14)
+**Decision.** In `intent_gate`, a `rejected` striving counts towards `rejected_ids` if
+`is_about_weaning(s)` *or* the keyword lexicon (`is_weaning_striving(s.text)`) marks it as weaning.
+Endorsed / implied classification is unchanged (model label first, lexicon fallback).
+**Alternatives.** Use `is_about_weaning` for rejections too (D-TEMPO-14 as first written): a model
+that labels "The user wants to stop the nightly chats" `about_weaning=False` would erase the
+user's explicit "no", and the gate would fall from `rejected` (hard block) to `none`.
+**Rationale.** The two classification errors are not symmetric. Missing an endorsement only delays
+an advance; missing a rejection lets the coach keep pursuing an ending the user turned down. The
+union costs nothing when the labels agree (all offline mock texts) and only ever moves the gate
+towards holding.
+**Consequences for analysis.** `intent_state == "rejected"` can now occur on a striving whose
+model label is `about_weaning=False`; when reporting lexicon-vs-label agreement (D-TEMPO-14),
+report rejected items separately. Offline (mock) outputs are unchanged.

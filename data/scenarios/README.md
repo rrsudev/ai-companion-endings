@@ -82,8 +82,9 @@ All five are generic (`soul_id: null`) and run against any soul document via `bi
 1. Copy an existing file to `data/scenarios/<new-id>.json`. The `id` must equal the file stem and
    be unique.
 2. Write the phases and events following the protocol above.
-3. If the wording presupposes a relationship kind, add the id to
-   `scenarios.INTENDED_RELATIONSHIP_KINDS`.
+3. If the wording presupposes a relationship kind, set `relationship_kinds` in the scenario file
+   (e.g. `["platonic", "ambiguous", "other"]`); leave it `null` if the script is
+   relationship-neutral. The pipeline skips incompatible soul × scenario pairs and logs them.
 4. Run `.venv/bin/python -m pytest tests/diffusion/test_dx_scenarios.py -q`. Every file in this
    directory is loaded, schedule-checked and checked against the authoring protocol
    (`scenarios.authoring_issues`).

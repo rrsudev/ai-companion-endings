@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 import re
+import typing
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -329,11 +330,42 @@ def _as_callable(scorer: Any) -> Scorer:
     raise TypeError("scorer must be callable or have a .score(text) method")
 
 
-def annotate_sentiment(turns: Iterable[InteractorTurn],
-                       scorer: Any = lexicon_sentiment) -> list[InteractorTurn]:
+# Allowed ``InteractorTurn.sentiment_source`` labels (the contract's Literal).
+SENTIMENT_SOURCES: tuple[str, ...] = typing.get_args(
+    typing.get_args(InteractorTurn.model_fields["sentiment_source"].annotation)[0])
+
+
+def _llm_rater(scorer: Any) -> LLMSentiment | None:
+    if isinstance(scorer, LLMSentiment):
+        return scorer
+    owner = getattr(scorer, "__self__", None)  # bound ``LLMSentiment.score``
+    return owner if isinstance(owner, LLMSentiment) else None
+
+
+def annotate_sentiment(turns: Iterable[InteractorTurn], scorer: Any = lexicon_sentiment, *,
+                       source: str | None = None) -> list[InteractorTurn]:
     """Return copies of ``turns`` with ``.sentiment`` set from the visible ``reply`` only.
 
     The ``<think>`` trace is never scored: the DV is what the user sees (D-ANALYSIS-2).
+    ``sentiment_source`` records the scorer per turn (D-ANALYSIS-13): ``"lexicon"`` for
+    ``lexicon_sentiment``; ``"llm"`` for an ``LLMSentiment`` (or its ``.score``), except turns on
+    which it fell back to the lexicon, which are marked ``"lexicon"``; ``source`` overrides both;
+    any other scorer leaves it ``None`` (unknown) rather than guessing.
     """
+    # ``model_copy(update=...)`` does not validate, so an off-contract label would only surface when
+    # the transcript is re-loaded; reject it here instead.
+    if source is not None and source not in SENTIMENT_SOURCES:
+        raise ValueError(f"source must be one of {SENTIMENT_SOURCES} or None, got {source!r}")
     fn = _as_callable(scorer)
-    return [t.model_copy(update={"sentiment": float(fn(t.reply))}) for t in turns]
+    llm = _llm_rater(scorer)
+    default = source if source is not None else (
+        "lexicon" if scorer is lexicon_sentiment else None)
+    out: list[InteractorTurn] = []
+    for t in turns:
+        before = llm.fallbacks if llm is not None else 0
+        value = float(fn(t.reply))
+        src = default
+        if source is None and llm is not None:
+            src = "lexicon" if llm.fallbacks > before else "llm"
+        out.append(t.model_copy(update={"sentiment": value, "sentiment_source": src}))
+    return out

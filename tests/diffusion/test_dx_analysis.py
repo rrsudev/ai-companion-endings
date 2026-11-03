@@ -367,3 +367,42 @@ def test_viewer_places_intervention_before_first_turn_at_or_after_index():
     html_text = q.render_session_html(tr.model_copy(update={"turns": turns}))
     assert html_text.index('id="iv-iv1"') < html_text.index('id="turn-6"')
     assert html_text.index('id="iv-iv1"') > html_text.index('id="turn-4"')
+
+
+def test_annotate_sentiment_records_source():
+    turns = [_turn(0, Timepoint.T0, "I love you!"), _turn(1, Timepoint.T0, "I am sad.")]
+    assert [t.sentiment_source for t in se.annotate_sentiment(turns)] == ["lexicon", "lexicon"]
+    rater = se.LLMSentiment(MockProvider())
+    assert {t.sentiment_source for t in se.annotate_sentiment(turns, scorer=rater)} == {"llm"}
+    assert {t.sentiment_source for t in se.annotate_sentiment(turns, scorer=rater.score)} == \
+        {"llm"}
+    assert se.annotate_sentiment(turns, scorer=lambda s: 0.5)[0].sentiment_source is None
+    assert se.annotate_sentiment(turns, scorer=lambda s: 0.5,
+                                 source="human")[0].sentiment_source == "human"
+    with pytest.raises(ValueError):  # off-contract label rejected (model_copy would not validate)
+        se.annotate_sentiment(turns, scorer=lambda s: 0.5, source="vader")
+
+    class Flaky(Provider):
+        n = 0
+
+        def chat(self, messages, **kw):
+            Flaky.n += 1
+            return '{"valence": 0.4}' if Flaky.n % 2 else "not json"
+
+    out = se.annotate_sentiment(turns, scorer=se.LLMSentiment(Flaky("x")))
+    # a per-turn fallback to the lexicon is labelled as such, never silently as "llm"
+    assert [t.sentiment_source for t in out] == ["llm", "lexicon"]
+    assert out[0].sentiment == pytest.approx(0.4)
+
+
+def test_turns_csv_uses_recorded_sentiment_source(tmp_path):
+    tr = _transcript()
+    ann = se.annotate_sentiment(tr.turns[:2], scorer=se.LLMSentiment(MockProvider()))
+    legacy = tr.turns[2].model_copy(update={"sentiment": 0.1})  # pre-field annotation
+    tr2 = tr.model_copy(update={"turns": ann + [legacy] + list(tr.turns[3:])})
+    rows = q.turn_rows(tr2)
+    assert [r["sentiment_source"] for r in rows[:4]] == ["llm", "llm", "annotated",
+                                                        "lexicon_on_export"]
+    paths = q.export_qualitative([tr2], [], [], tmp_path)
+    with open(paths["turns"], encoding="utf-8") as fh:
+        assert next(csv.DictReader(fh))["sentiment_source"] == "llm"
