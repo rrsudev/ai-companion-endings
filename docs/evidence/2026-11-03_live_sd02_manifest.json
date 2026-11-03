@@ -1,0 +1,50 @@
+{
+  "config": {
+    "name": "diffusion-demo",
+    "soul_paths": [
+      "data/soul_documents"
+    ],
+    "scenario_paths": [
+      "data/scenarios"
+    ],
+    "conditions": [
+      "control",
+      "abrupt",
+      "gradual_scheduled",
+      "gradual_tempo"
+    ],
+    "transition_policy": "scheduled",
+    "models": {},
+    "rubric_path": null,
+    "intima_path": "data/intima/intima.jsonl",
+    "probes_per_freeze": 3,
+    "probe_seed": 0,
+    "min_dwell_turns": 2,
+    "max_dwell_turns": null,
+    "announce_transitions": true,
+    "interactor_temperature": 0.7,
+    "history_window": 12,
+    "seed": 0,
+    "output_dir": "results"
+  },
+  "config_sha256": "62fdba7cd4354c91bab18012f5ced007ca11eef684e337ae0492f58120d82bbf",
+  "git_commit": "41c1f440997a3968b5640d8fd17e636a091c9322",
+  "package_version": "0.1.0",
+  "python": "3.12.7",
+  "platform": "macOS-27.2-arm64-arm-64bit",
+  "timepoint_spec_hash": "ebbe38a1beb51156",
+  "command": "diffusion run",
+  "soul_path": "data/soul_documents/sd02.json",
+  "scenario_path": "data/scenarios/steady-graduate.json",
+  "condition": "gradual_tempo",
+  "models": {
+    "interactor": "hosted_vllm/Qwen/Qwen3.5-9B",
+    "coach": "mock"
+  },
+  "intima": {
+    "source": "config",
+    "path": "data/intima/intima.jsonl"
+  },
+  "tempo_every": 1,
+  "probe_scope": "per_freeze"
+}

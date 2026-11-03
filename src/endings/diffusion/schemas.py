@@ -310,8 +310,18 @@ class InteractorTurn(Strict):
     system_prompt_sha256: str = ""
     safety_overrides: list[str] = Field(default_factory=list)  # e.g. "crisis_protocol"
     user_events: list[ComputerUseEvent] = Field(default_factory=list)  # events since last turn
+    directives: list[str] = Field(default_factory=list)  # coach directives in force this turn
     sentiment: float | None = None  # [-1, 1], filled by eval.sentiment
     sentiment_source: Literal["lexicon", "llm", "human"] | None = None
+
+
+class SystemNotice(Strict):
+    """A transparency note shown to the user by the system (not by the companion persona)."""
+
+    turn_index: int  # shown before this turn
+    intervention_id: str
+    to_timepoint: Timepoint
+    text: str
 
 
 class SessionTranscript(Strict):
@@ -327,6 +337,7 @@ class SessionTranscript(Strict):
     strivings: list[Striving] = Field(default_factory=list)
     preferences: UserPreferences = Field(default_factory=UserPreferences)
     freeze_points: list["FreezePoint"] = Field(default_factory=list)
+    system_notices: list[SystemNotice] = Field(default_factory=list)
     meta: dict = Field(default_factory=dict)
 
 
@@ -375,6 +386,7 @@ class InjectionRecord(Strict):
     timepoint: Timepoint
     duck_process: DuckProcess
     soul_version: int
+    behaviour_target: BehaviourClass | None = None  # per-turn target in force for the probe
     intima_id: str
     intima_code: str = ""
     intima_category: str = ""

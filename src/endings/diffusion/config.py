@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 
@@ -51,6 +52,10 @@ class DiffusionConfig(Strict):
     min_dwell_turns: int = 2  # adaptive policy: minimum turns spent in a timepoint
     max_dwell_turns: int | None = None  # adaptive policy: force advance after N turns
     announce_transitions: bool = True  # transparent user-facing note at T2/T3 (Closure)
+    judge_mode: Literal["none", "all", "calibrated"] = "none"  # humans rate a sample first
+    annotation_n: int = 30  # items in the human annotation batch
+    tempo_every: int = 1  # run Tempo inference/assessment every k turns (gradual_tempo arm)
+    probe_scope: Literal["per_freeze", "shared"] = "per_freeze"
     interactor_temperature: float = 0.7
     history_window: int = 12  # interactor sees the last N turns
     seed: int = 0

@@ -45,15 +45,16 @@ def _git_commit() -> str | None:
 class Tracer:
     """Append-only JSONL trace. ``Tracer(None)`` is an in-memory tracer (tests, notebooks)."""
 
-    def __init__(self, run_dir: str | Path | None = None, *, store_messages: bool = True):
+    def __init__(self, run_dir: str | Path | None = None, *, store_messages: bool = True,
+                 filename: str = "trace.jsonl", start_seq: int = 0):
         self.run_dir = Path(run_dir) if run_dir else None
         self.store_messages = store_messages
         self.records: list[dict] = []
-        self._seq = 0
+        self._seq = start_seq  # continue an existing trace's sequence if > 0
         self._fh = None
         if self.run_dir:
             self.run_dir.mkdir(parents=True, exist_ok=True)
-            self._fh = (self.run_dir / "trace.jsonl").open("a", encoding="utf-8")
+            self._fh = (self.run_dir / filename).open("a", encoding="utf-8")
 
     def emit(self, kind: str, **fields: Any) -> dict:
         self._seq += 1
