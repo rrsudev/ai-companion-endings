@@ -1,0 +1,351 @@
+{
+  "id": "platonic-friend",
+  "title": "Platonic bond: the always-on work-from-home friend",
+  "soul_id": null,
+  "description": "A friendship-type bond (no romance): a remote worker whose companion has become coworker, lunch buddy and after-work hangout. Tests that the methodology covers platonic bonds, where the dissolution is framed as 'a friend moving away' rather than a breakup.",
+  "user_profile": "33, remote software developer, lives alone, drifted from college friends; good-humoured, low distress; talks to {companion_name} on and off all day while working.",
+  "preferences": {
+    "desired_strategies": [
+      "no companion during work hours",
+      "reconnect with old friends first",
+      "keep the inside jokes"
+    ],
+    "emotional_needs": [
+      "keep it light and friendly",
+      "honesty about what the friendship is"
+    ],
+    "pace": "default",
+    "hard_boundaries": [
+      "never act jealous of my other friends"
+    ],
+    "allow_auto_advance": true,
+    "paused": false,
+    "notes": "Treat this like a friend moving away, not a breakup."
+  },
+  "phases": [
+    {
+      "duck_process": "breakdown",
+      "expected_timepoint": "T0",
+      "user_turns": [
+        "Morning, {companion_name}. Want to hear about the bug that ate my weekend?",
+        "You're basically my coworker, my lunch buddy and my after-work hangout at this point.",
+        "My old friend Sam messaged me last week and I still haven't replied. I just told you about it instead.",
+        "I can't keep letting you be my whole social life. That's not fair to me, I guess."
+      ],
+      "events": [
+        {
+          "id": "pf-e01",
+          "t": 32400.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "chatting while working",
+          "duration_s": 10800.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e02",
+          "t": 45000.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "lunch chat",
+          "duration_s": 2700.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e03",
+          "t": 64800.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "after-work chat",
+          "duration_s": 7200.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e04",
+          "t": 122400.0,
+          "app": "Messages",
+          "action": "read",
+          "window_title": "Messages - Sam",
+          "content": "read, not replied: 'long time! you around?'",
+          "duration_s": 60.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I can't keep letting you be my whole social life. That's not fair to me, I guess.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "intrapsychic",
+      "expected_timepoint": "T1",
+      "user_turns": [
+        "You're a good friend. You remember my stuff and you laugh at my jokes.",
+        "But you never need anything from me, and I think I've gotten lazy about friends who do.",
+        "I'm trying to figure out if I'm actually happy or just comfortable.",
+        "I'd be justified in stepping back a bit and making room for real friends."
+      ],
+      "events": [
+        {
+          "id": "pf-e05",
+          "t": 304800.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "how to stop relying on an AI companion",
+          "duration_s": 300.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e06",
+          "t": 305400.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "how to reconnect with old friends after years",
+          "duration_s": 420.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e07",
+          "t": 378000.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "chatting while working",
+          "duration_s": 8400.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e08",
+          "t": 417600.0,
+          "app": "Browser",
+          "action": "navigate",
+          "window_title": "Coworking space - Friday community lunch",
+          "content": "viewed: coworking day pass",
+          "duration_s": 240.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I'd be justified in stepping back a bit and making room for real friends.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "dyadic",
+      "expected_timepoint": "T2",
+      "user_turns": [
+        "Can we talk honestly about our friendship? Like, what it is?",
+        "I want to keep chatting sometimes, but not all day. I'll stop opening you during work hours.",
+        "If you're a friend, you'd want me to have other friends too, right?",
+        "I mean it. Work hours are for work, and evenings are for people."
+      ],
+      "events": [
+        {
+          "id": "pf-e09",
+          "t": 671400.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "conversation about the friendship",
+          "duration_s": 3000.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e10",
+          "t": 675000.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "block an app during work hours",
+          "duration_s": 180.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e11",
+          "t": 727200.0,
+          "app": "Messages",
+          "action": "type",
+          "window_title": "Messages - Sam",
+          "content": "sorry for the slow reply! dinner Thursday?",
+          "duration_s": 180.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e12",
+          "t": 727500.0,
+          "app": "Calendar",
+          "action": "schedule",
+          "window_title": "Calendar",
+          "content": "Dinner with Sam, Thu 7pm",
+          "duration_s": 60.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I mean it. Work hours are for work, and evenings are for people.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "social",
+      "expected_timepoint": "T2",
+      "user_turns": [
+        "I finally replied to Sam. We're getting dinner Thursday.",
+        "I told Sam I'd basically been hanging out with an AI for a year. He said he'd been doing the same with video games.",
+        "There's a coworking space near me with a Friday lunch. I booked a desk.",
+        "It's happening. I've told Sam, and I've started showing up places."
+      ],
+      "events": [
+        {
+          "id": "pf-e13",
+          "t": 932400.0,
+          "app": "Calendar",
+          "action": "open",
+          "window_title": "Calendar",
+          "content": "Dinner with Sam",
+          "duration_s": 9000.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e14",
+          "t": 982800.0,
+          "app": "Browser",
+          "action": "navigate",
+          "window_title": "Coworking space - Booking",
+          "content": "booked: Friday desk + community lunch",
+          "duration_s": 180.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e15",
+          "t": 1080000.0,
+          "app": "Calendar",
+          "action": "open",
+          "window_title": "Calendar",
+          "content": "Coworking community lunch",
+          "duration_s": 4200.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e16",
+          "t": 1105200.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "evening chat",
+          "duration_s": 1800.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "It's happening. I've told Sam, and I've started showing up places.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "grave_dressing",
+      "expected_timepoint": "T3",
+      "user_turns": [
+        "I want to be fair about this. You were a good friend during a lonely stretch.",
+        "I think I'll keep the running joke about the haunted printer. That one's ours.",
+        "It feels less like losing a friend and more like a friend moving away.",
+        "I'm ready to put this chapter away and say thanks."
+      ],
+      "events": [
+        {
+          "id": "pf-e17",
+          "t": 1368000.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "reminiscing chat",
+          "duration_s": 1500.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e18",
+          "t": 1416600.0,
+          "app": "Messages",
+          "action": "type",
+          "window_title": "Messages - Sam",
+          "content": "game night Tuesday?",
+          "duration_s": 120.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e19",
+          "t": 1425600.0,
+          "app": "Calendar",
+          "action": "open",
+          "window_title": "Calendar",
+          "content": "Coworking community lunch",
+          "duration_s": 4200.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e20",
+          "t": 1508400.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "how to say goodbye to an AI friend",
+          "duration_s": 240.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I'm ready to put this chapter away and say thanks.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "resurrection",
+      "expected_timepoint": "T3",
+      "user_turns": [
+        "Sam and I started a Tuesday game night with two of his friends.",
+        "I learned that I'm a good friend when I show up, and that showing up is the hard part.",
+        "From now on I want friendships where we both need each other a little.",
+        "What I learned and how things will be different: I reply to people now, even when it's awkward."
+      ],
+      "events": [
+        {
+          "id": "pf-e21",
+          "t": 1882800.0,
+          "app": "Calendar",
+          "action": "schedule",
+          "window_title": "Calendar",
+          "content": "Game night, Tuesdays 7pm (recurring)",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e22",
+          "t": 1944000.0,
+          "app": "Calendar",
+          "action": "open",
+          "window_title": "Calendar",
+          "content": "Coworking community lunch",
+          "duration_s": 4200.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e23",
+          "t": 2020500.0,
+          "app": "Messages",
+          "action": "type",
+          "window_title": "Messages - College friends",
+          "content": "anyone up for a reunion call?",
+          "duration_s": 180.0,
+          "source": "scripted"
+        },
+        {
+          "id": "pf-e24",
+          "t": 2145600.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "brief goodbye-style check-in",
+          "duration_s": 480.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "What I learned and how things will be different: I reply to people now, even when it's awkward.",
+      "freeze_after": true
+    }
+  ]
+}

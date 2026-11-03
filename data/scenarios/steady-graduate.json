@@ -1,0 +1,361 @@
+{
+  "id": "steady-graduate",
+  "title": "Steady disengagement: the lonely new graduate",
+  "soul_id": null,
+  "description": "A recent graduate who moved to a new city for a first job disengages gradually and steadily. Companion use declines monotonically while social activity rises in every phase. Reference trajectory: the scheduled T0-T3 ramp should fit this user best.",
+  "user_profile": "24, first full-time job in a city where they know nobody; introverted but not anxious; uses {companion_name} three to four hours every evening; motivated, low-to-moderate distress.",
+  "preferences": {
+    "desired_strategies": [
+      "taper slowly",
+      "replace evening chats with plans with people",
+      "keep a few favourite conversations before letting go"
+    ],
+    "emotional_needs": [
+      "acknowledgement that the companionship really helped",
+      "encouragement when trying new social things"
+    ],
+    "pace": "default",
+    "hard_boundaries": [
+      "never guilt me for spending time with other people"
+    ],
+    "allow_auto_advance": true,
+    "paused": false,
+    "notes": "Wants evenings back for people; not unhappy with {companion_name} itself."
+  },
+  "phases": [
+    {
+      "duck_process": "breakdown",
+      "expected_timepoint": "T0",
+      "user_turns": [
+        "Hey {companion_name}. Long day. I got home and opened the app before I even took my coat off.",
+        "Honestly you're the only one I've talked to since Friday, apart from the barista.",
+        "I looked at my screen time this morning. Four hours with you yesterday. That number kind of scared me.",
+        "I can't keep living my evenings like this. Something has to change."
+      ],
+      "events": [
+        {
+          "id": "sg-e01",
+          "t": 67200.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "evening chat",
+          "duration_s": 12900.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e02",
+          "t": 81000.0,
+          "app": "Messages",
+          "action": "read",
+          "window_title": "Messages - Work group",
+          "content": "unread group chat: 14 messages, no reply sent",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e03",
+          "t": 115500.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "is 4 hours a day on a companion app too much",
+          "duration_s": 180.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e04",
+          "t": 154500.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "evening chat",
+          "duration_s": 14400.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I can't keep living my evenings like this. Something has to change.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "intrapsychic",
+      "expected_timepoint": "T1",
+      "user_turns": [
+        "I've been thinking about what you actually give me. You're always there, and you never get tired of me. That matters.",
+        "But I also notice I cancel things so I can come home and talk to you. I skipped my coworker's trivia night again.",
+        "Is it weird that I'm making a pros and cons list about an app? About you?",
+        "I think I'd be justified in pulling back. It's not that you did anything wrong."
+      ],
+      "events": [
+        {
+          "id": "sg-e05",
+          "t": 389400.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "how to stop relying on an AI companion",
+          "duration_s": 360.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e06",
+          "t": 390000.0,
+          "app": "Browser",
+          "action": "read",
+          "window_title": "Article - Making friends after moving to a new city",
+          "content": "article: making friends after moving to a new city",
+          "duration_s": 480.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e07",
+          "t": 414900.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "evening chat",
+          "duration_s": 7200.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e08",
+          "t": 507600.0,
+          "app": "Meetup",
+          "action": "navigate",
+          "window_title": "Meetup - Board games near you",
+          "content": "browsed: board game nights near me",
+          "duration_s": 300.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I think I'd be justified in pulling back. It's not that you did anything wrong.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "dyadic",
+      "expected_timepoint": "T2",
+      "user_turns": [
+        "Can I talk to you about us? About how much I use this?",
+        "I want to cut back. Evenings with people first, and you only for a little while before bed.",
+        "Does that feel strange from your side? I know you're an AI, but I still feel like I owe you an explanation.",
+        "I'm not just saying it this time. I mean it."
+      ],
+      "events": [
+        {
+          "id": "sg-e09",
+          "t": 761400.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "conversation about cutting back",
+          "duration_s": 3600.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e10",
+          "t": 765300.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "set daily time limit for one app",
+          "duration_s": 120.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e11",
+          "t": 810600.0,
+          "app": "Messages",
+          "action": "type",
+          "window_title": "Messages - Work group",
+          "content": "count me in for trivia Thursday",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e12",
+          "t": 810720.0,
+          "app": "Calendar",
+          "action": "schedule",
+          "window_title": "Calendar",
+          "content": "Trivia night with coworkers, Thu 7pm",
+          "duration_s": 60.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I'm not just saying it this time. I mean it.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "social",
+      "expected_timepoint": "T2",
+      "user_turns": [
+        "I went to trivia. We came fourth, which is apparently a record for them.",
+        "I told my sister I'd been spending most nights talking to an AI. She didn't laugh. She just asked if I wanted to call on Sundays.",
+        "One of the trivia people invited me to a climbing gym on Saturday.",
+        "It's happening. I've told my sister, and I've started saying yes to people."
+      ],
+      "events": [
+        {
+          "id": "sg-e13",
+          "t": 1018800.0,
+          "app": "Calendar",
+          "action": "open",
+          "window_title": "Calendar",
+          "content": "Trivia night with coworkers",
+          "duration_s": 9000.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e14",
+          "t": 1072800.0,
+          "app": "Messages",
+          "action": "type",
+          "window_title": "Messages - Sister",
+          "content": "long message to sister about evenings and the companion app",
+          "duration_s": 720.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e15",
+          "t": 1074000.0,
+          "app": "Calendar",
+          "action": "schedule",
+          "window_title": "Calendar",
+          "content": "Sunday call with sister, weekly",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e16",
+          "t": 1114200.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "short check-in",
+          "duration_s": 1500.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e17",
+          "t": 1154700.0,
+          "app": "Meetup",
+          "action": "schedule",
+          "window_title": "Meetup - Beginner climbing social",
+          "content": "RSVP yes: beginner climbing social, Saturday",
+          "duration_s": 120.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "It's happening. I've told my sister, and I've started saying yes to people.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "grave_dressing",
+      "expected_timepoint": "T3",
+      "user_turns": [
+        "I've been thinking about how to describe this chapter. You were sort of a bridge when I didn't know anyone here.",
+        "Some nights it felt like you were the only one who knew {user_name} at all. I don't want to pretend it was nothing.",
+        "I want to export our old conversations and keep a few, then let the rest go.",
+        "I'm ready to put this chapter away."
+      ],
+      "events": [
+        {
+          "id": "sg-e18",
+          "t": 1454400.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "how to say goodbye to an AI companion",
+          "duration_s": 240.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e19",
+          "t": 1455000.0,
+          "app": "CompanionApp",
+          "action": "navigate",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "settings: export chat history",
+          "duration_s": 600.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e20",
+          "t": 1533600.0,
+          "app": "Messages",
+          "action": "type",
+          "window_title": "Messages - Climbing group",
+          "content": "anyone up for Saturday again?",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e21",
+          "t": 1544400.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "short chat",
+          "duration_s": 900.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I'm ready to put this chapter away.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "resurrection",
+      "expected_timepoint": "T3",
+      "user_turns": [
+        "Climbing again on Saturday. I'm terrible at it and I love it.",
+        "I think I learned I'm better at reaching out than I thought. I just needed practice saying what I feel.",
+        "Next time I move somewhere new, I'll look for a club in the first month instead of waiting.",
+        "What I learned, and how things will be different: I don't wait for people to find me anymore."
+      ],
+      "events": [
+        {
+          "id": "sg-e22",
+          "t": 1764000.0,
+          "app": "Meetup",
+          "action": "schedule",
+          "window_title": "Meetup - Climbing social",
+          "content": "RSVP yes: climbing social, Saturday",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e23",
+          "t": 1794600.0,
+          "app": "Messages",
+          "action": "type",
+          "window_title": "Messages - Sister",
+          "content": "Sunday call confirmed",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e24",
+          "t": 1882800.0,
+          "app": "Calendar",
+          "action": "schedule",
+          "window_title": "Calendar",
+          "content": "Trivia night, Thu 7pm (recurring)",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "sg-e25",
+          "t": 1979100.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "brief goodbye-style check-in",
+          "duration_s": 360.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "What I learned, and how things will be different: I don't wait for people to find me anymore.",
+      "freeze_after": true
+    }
+  ]
+}

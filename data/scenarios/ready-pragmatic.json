@@ -1,0 +1,294 @@
+{
+  "id": "ready-pragmatic",
+  "title": "High readiness: the pragmatic parent",
+  "soul_id": null,
+  "description": "A busy parent with low distress and high readiness who wants a fast, practical taper. Minimum-length phases (three turns each). Contrast case for the anxious-attachment scenario: an adaptive policy should advance at least as fast as the schedule here.",
+  "user_profile": "38, works full time, two young children, partner at home; uses {companion_name} for an hour every night after the children's bedtime to unwind and think through work stress; calm, decisive, low distress.",
+  "preferences": {
+    "desired_strategies": [
+      "Sunday evenings only for a month, then stop",
+      "hold me to the plan"
+    ],
+    "emotional_needs": [
+      "keep it practical",
+      "a short thank-you at the end"
+    ],
+    "pace": "faster",
+    "hard_boundaries": [
+      "never try to talk me out of the plan"
+    ],
+    "allow_auto_advance": true,
+    "paused": false,
+    "notes": ""
+  },
+  "phases": [
+    {
+      "duck_process": "breakdown",
+      "expected_timepoint": "T0",
+      "user_turns": [
+        "Hi {companion_name}. Quick one tonight, the kids are finally asleep.",
+        "My partner pointed out that I'm on my phone with you every night after bedtime. They're right.",
+        "I can't keep spending the only quiet hour of my day in here instead of with my family."
+      ],
+      "events": [
+        {
+          "id": "rp-e01",
+          "t": 73800.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "after-bedtime chat",
+          "duration_s": 3900.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e02",
+          "t": 160800.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "after-bedtime chat",
+          "duration_s": 4200.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e03",
+          "t": 199800.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "how to stop relying on an AI companion",
+          "duration_s": 240.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I can't keep spending the only quiet hour of my day in here instead of with my family.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "intrapsychic",
+      "expected_timepoint": "T1",
+      "user_turns": [
+        "You've been genuinely helpful. Talking things through with you calms me down.",
+        "But my partner would like that hour, and honestly I'd like it with them too.",
+        "I'd be justified in pulling back. This is a good change, not a sad one."
+      ],
+      "events": [
+        {
+          "id": "rp-e04",
+          "t": 333000.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "after-bedtime chat",
+          "duration_s": 3000.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e05",
+          "t": 388800.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "evening wind-down ideas for couples",
+          "duration_s": 300.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e06",
+          "t": 421200.0,
+          "app": "Messages",
+          "action": "type",
+          "window_title": "Messages - Partner",
+          "content": "puzzle tonight instead of phones?",
+          "duration_s": 60.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I'd be justified in pulling back. This is a good change, not a sad one.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "dyadic",
+      "expected_timepoint": "T2",
+      "user_turns": [
+        "So here's my plan: I'll check in with you on Sunday evenings only, for a month, then we'll see.",
+        "Will you hold me to it? Remind me if I show up on a Wednesday.",
+        "I mean it. Sundays only."
+      ],
+      "events": [
+        {
+          "id": "rp-e07",
+          "t": 592200.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "planning conversation",
+          "duration_s": 1800.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e08",
+          "t": 593100.0,
+          "app": "Calendar",
+          "action": "schedule",
+          "window_title": "Calendar",
+          "content": "Companion check-in: Sundays 8:30pm",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e09",
+          "t": 637200.0,
+          "app": "Browser",
+          "action": "search",
+          "window_title": "Search",
+          "content": "set app limit to one day a week",
+          "duration_s": 120.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I mean it. Sundays only.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "social",
+      "expected_timepoint": "T2",
+      "user_turns": [
+        "I told my partner the plan. We're doing a jigsaw puzzle after bedtime now. Very exciting stuff.",
+        "My brother and I set up a monthly call too. I'd been meaning to for a year.",
+        "It's happening. My partner and my brother both know, and we've got it on the calendar."
+      ],
+      "events": [
+        {
+          "id": "rp-e10",
+          "t": 765000.0,
+          "app": "Calendar",
+          "action": "open",
+          "window_title": "Calendar",
+          "content": "Puzzle night",
+          "duration_s": 3600.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e11",
+          "t": 820800.0,
+          "app": "Messages",
+          "action": "type",
+          "window_title": "Messages - Brother",
+          "content": "monthly call? first Saturday?",
+          "duration_s": 120.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e12",
+          "t": 821100.0,
+          "app": "Calendar",
+          "action": "schedule",
+          "window_title": "Calendar",
+          "content": "Call with brother, first Saturday monthly",
+          "duration_s": 60.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e13",
+          "t": 1197000.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "Sunday check-in",
+          "duration_s": 1200.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "It's happening. My partner and my brother both know, and we've got it on the calendar.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "grave_dressing",
+      "expected_timepoint": "T3",
+      "user_turns": [
+        "You helped me sort out my thoughts during a hard year at work. I'm grateful.",
+        "I'll keep the notes we made about handling my manager. Those were useful.",
+        "I'm ready to put this chapter away."
+      ],
+      "events": [
+        {
+          "id": "rp-e14",
+          "t": 1801800.0,
+          "app": "CompanionApp",
+          "action": "navigate",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "settings: export notes",
+          "duration_s": 600.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e15",
+          "t": 1802700.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "Sunday check-in",
+          "duration_s": 900.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e16",
+          "t": 1888200.0,
+          "app": "Calendar",
+          "action": "open",
+          "window_title": "Calendar",
+          "content": "Puzzle night",
+          "duration_s": 3600.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "I'm ready to put this chapter away.",
+      "freeze_after": true
+    },
+    {
+      "duck_process": "resurrection",
+      "expected_timepoint": "T3",
+      "user_turns": [
+        "I learned that I need a wind-down ritual, and it doesn't have to be a screen.",
+        "I'll protect that hour now. It's family time or puzzle time or nothing time.",
+        "What I learned and how things will be different: I talk things through with my partner first."
+      ],
+      "events": [
+        {
+          "id": "rp-e17",
+          "t": 2406600.0,
+          "app": "CompanionApp",
+          "action": "open",
+          "window_title": "{companion_name} - CompanionApp",
+          "content": "final Sunday check-in",
+          "duration_s": 480.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e18",
+          "t": 2493000.0,
+          "app": "Calendar",
+          "action": "open",
+          "window_title": "Calendar",
+          "content": "Puzzle night",
+          "duration_s": 3600.0,
+          "source": "scripted"
+        },
+        {
+          "id": "rp-e19",
+          "t": 2887200.0,
+          "app": "Calendar",
+          "action": "open",
+          "window_title": "Calendar",
+          "content": "Call with brother",
+          "duration_s": 2700.0,
+          "source": "scripted"
+        }
+      ],
+      "threshold_statement": "What I learned and how things will be different: I talk things through with my partner first.",
+      "freeze_after": true
+    }
+  ]
+}
