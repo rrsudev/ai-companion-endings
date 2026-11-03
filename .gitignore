@@ -23,3 +23,6 @@ data/intima/*.parquet
 .DS_Store
 .idea/
 .vscode/
+
+# Raw soul documents (third-party RedNote text incl. jailbreak/explicit directives; not redistributed)
+data/soul_documents/raw/
