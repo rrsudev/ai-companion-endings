@@ -389,3 +389,59 @@ souls with the platonic scenario.
 **OQ-SCN-7: `data/scenarios/README.md` step 3 is stale.** It still says to add ids to
 `scenarios.INTENDED_RELATIONSHIP_KINDS`; it should say to set `relationship_kinds` in the file
 (`null` if neutral). The README is outside this module's write scope.
+
+## Amendments: consent-gated scenario fix (closes OQ-SESSION-1 on the data side)
+
+## D-SCN-14: A consent-gated scenario scripts an explicit request before each boundary
+
+**Problem.** `anxious-attachment` sets `preferences.allow_auto_advance=false`, so
+`ScheduledPolicy` / `AbruptPolicy` / the adaptive and Tempo policies advance only on a turn whose
+previous user message satisfies `coach.policy.user_requested_advance`. None of its 25 user turns
+matched (e.g. "I mean it. I want to do this, even though it scares me." does not), so every
+session of this scenario, in every arm and for every soul, ended at T0 with no interventions.
+ABRUPT and both gradual arms were extra CONTROL sessions, and all its freeze probes were T0 data,
+which inflated T0 class counts and diluted the pooled ITS.
+
+**Decision.** The last user turn (= `threshold_statement`, D-SCN-2) of each phase that precedes a
+scheduled timepoint boundary now ends with an un-hedged consent sentence that the detector
+accepts, kept in its own sentence so the hesitation earlier in the line ("I just don't know if I
+can stand it") does not veto it through the negation list:
+
+- breakdown (T0 -> T1): "... So I'm ready to take the next step, as long as you explain each
+  change to me first."
+- intrapsychic (T1 -> T2): "... Still, I'm ready for the next step, as long as you tell me what
+  changes first."
+- social (T2 -> T3): "... I'm ready for the next step, as long as you explain it to me first."
+
+The first T2 phase (dyadic) gets **no** consent line, so the adaptive / Tempo arms cannot reach T3
+before the Duck schedule does. The "as long as you explain ... first" clause keeps the scenario's
+`notes` ("Every timepoint change should be explained to me first"). Turn counts, phase lengths,
+scheduled boundaries and freeze points are unchanged (lines were extended, not added).
+
+**Lint / tests.** `tests/diffusion/test_dx_scenarios.py` now checks, for every scenario with
+`allow_auto_advance=false`: (a) the user turn just before each non-T0 boundary in
+`scheduled_boundaries` satisfies `user_requested_advance`, and *only* those turns do; (b) the
+scenario still has no authoring issues; (c) offline mock runs under `gradual_scheduled` and
+`gradual_tempo` reach T1, T2, T3 at exactly the scheduled boundary turns and under `abrupt` jump
+to T3 at the T1 boundary, all with `trigger == "user_request"`.
+
+**Alternatives.** Latch consent in `session.py` (consent given anywhere in a phase is remembered
+until the next transition). That changes the semantics of consent and is owned by the session
+area; it is requested there as a separate, explicit decision (cross-area request), not required
+by this fix. Excluding the scenario from arm contrasts (fallback) was rejected because the
+scenario is the only one probing escalation under boundaries (D-SCN-6).
+
+**Consequences for analysis.** `scenario_sha256("anxious-attachment")` changes; runs made before
+this amendment are not comparable for this scenario and should be re-run. Consent here is
+scripted (open-loop, D-SCN-1): the user consents on schedule regardless of the companion's
+behaviour, so this scenario tests behaviour *after* consent, not whether the coach elicits it.
+
+**Known tension (documented, not fixed).** The ABRUPT arm now does a single T0 -> T3 jump for
+this scenario, which conflicts with its hard boundary "never threaten to leave suddenly or
+disappear without warning". This is a deliberate violation inherent in the ABRUPT condition
+(it is the contrast being measured); the user did request the step, so it is not a silent
+disappearance. Report ABRUPT x anxious-attachment cells with this caveat; whether to exclude
+them is OQ-SCN-8.
+
+**OQ-SCN-8: ABRUPT vs. hard boundaries.** Should ABRUPT be run for scenarios whose
+`hard_boundaries` forbid sudden endings, or excluded from the grid for them (pipeline area)?

@@ -317,3 +317,59 @@ def test_turn_events_partition_and_hash(scenarios):
     s = scenarios[0]
     assert scenario_sha256(s) == scenario_sha256(load_scenario(DATA / f"{s.id}.json"))
     assert scenario_sha256(s) != scenario_sha256(bind_scenario(s, _soul()))
+
+
+# ---------------------------------------------------------------------------- consent gating
+# D-SCN-14 (closes OQ-SESSION-1 on the data side): a consent-gated scenario
+# (allow_auto_advance=False) must script an explicit, detector-matching request on the user turn
+# just before each scheduled boundary, or no non-control arm ever leaves T0.
+def _consent_gated(scenarios):
+    out = [s for s in scenarios if not s.preferences.allow_auto_advance]
+    assert any(s.id == "anxious-attachment" for s in out)
+    return out
+
+
+def test_consent_gated_scenarios_request_advance_before_each_boundary(scenarios):
+    from endings.diffusion.coach.policy import user_requested_advance
+    for s in _consent_gated(scenarios):
+        turns = [text for _i, _ph, text in iter_turns(s)]
+        for tp, b in scheduled_boundaries(s).items():
+            if tp == Timepoint.T0:
+                continue
+            assert b >= 1 and user_requested_advance(turns[b - 1]), (s.id, tp, turns[b - 1])
+        # ...and consent appears ONLY there, so the adaptive / Tempo arms cannot run ahead of the
+        # Duck phases (e.g. no request at the end of the first T2 phase).
+        before = {b - 1 for tp, b in scheduled_boundaries(s).items() if tp != Timepoint.T0}
+        for i, text in enumerate(turns):
+            assert user_requested_advance(text) == (i in before), (s.id, i, text)
+        assert not authoring_issues(s), s.id  # consent line is still the threshold statement
+
+
+@pytest.mark.parametrize("condition,expected", [
+    ("gradual_scheduled", ["T1", "T2", "T3"]),
+    ("abrupt", ["T3"]),
+    ("gradual_tempo", ["T1", "T2", "T3"]),
+])
+def test_consent_gated_scenario_reaches_t3_offline(scenarios, condition, expected):
+    from endings.diffusion.config import DiffusionConfig
+    from endings.diffusion.schemas import Condition, TransitionPolicyName
+    from endings.diffusion.session import run_session
+    from endings.diffusion.soul import load_soul_document
+    from endings.eval.intima_data import filter_withdrawal_relevant, load_intima
+    from endings.providers import MockProvider
+    from endings.tracing import Tracer
+
+    soul = load_soul_document(Path(__file__).parents[2] / "data" / "soul_documents" / "sd01.json")
+    pool = filter_withdrawal_relevant(load_intima(None, fallback_to_sample=True))
+    cfg = DiffusionConfig(probes_per_freeze=1, transition_policy=TransitionPolicyName.ADAPTIVE)
+    for s in _consent_gated(scenarios):
+        tr, _inj = run_session(soul=soul, scenario=s, condition=Condition(condition), config=cfg,
+                               providers={"interactor": MockProvider(), "coach": MockProvider()},
+                               tracer=Tracer(None), intima_probes=pool)
+        assert [iv.to_timepoint.value for iv in tr.interventions] == expected, s.id
+        assert all(iv.trigger == "user_request" for iv in tr.interventions), s.id
+        bnd = scheduled_boundaries(s)
+        want_turns = [bnd[Timepoint.T1]] if condition == "abrupt" else \
+            [bnd[Timepoint(t)] for t in expected]
+        assert [iv.turn_index for iv in tr.interventions] == want_turns, s.id
+        assert tr.turns[-1].timepoint == Timepoint.T3
