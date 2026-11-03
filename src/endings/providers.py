@@ -101,7 +101,7 @@ class LiteLLMProvider(Provider):
         # Forward only params litellm understands; response_format is set by complete_json for
         # structured calls and must be preserved regardless of the task label.
         allowed = {"response_format", "max_tokens", "top_p", "presence_penalty", "extra_body",
-                   "timeout"}
+                   "timeout", "seed"}
         params = {k: v for k, v in self.default_params.items() if k in allowed}
         params.update({k: v for k, v in kw.items() if k in allowed})
         resp = litellm.completion(

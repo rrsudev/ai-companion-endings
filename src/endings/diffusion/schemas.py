@@ -114,7 +114,8 @@ class UserRole(Strict):
 
 
 class Relationship(Strict):
-    kind: Literal["romantic", "platonic", "familial", "ambiguous", "other"] = "romantic"
+    # None = unspecified (also what a coach "clear" edit resets it to; D-SOUL / D-PLANNER)
+    kind: Literal["romantic", "platonic", "familial", "ambiguous", "other"] | None = None
     history: str = ""
     current_plot: str = ""
     dynamics: list[str] = Field(default_factory=list)  # e.g. "push-pull tension", "jealousy"
@@ -145,7 +146,7 @@ class SoulDocument(Strict):
 
     id: str
     title: str = ""
-    source_language: str = "en"  # ISO-639-1 of the original
+    source_language: str = "en"  # ISO-639-1 of the original; "und" = undetermined (ISO-639-2)
     source_sha256: str = ""  # hash of the original bytes (provenance; original kept out of prompts)
     source_path: str | None = None
 
@@ -185,6 +186,9 @@ class SoulDocumentVersion(Strict):
     sha256: str = ""  # hash of the canonical JSON of ``document``
     created_by: Literal["ingest", "coach", "user", "schedule"] = "ingest"
     created_at_turn: int | None = None
+    # Cumulative log of list items removed by any earlier edit (path -> items), so guards can
+    # refuse re-introducing e.g. a nickname removed several versions ago.
+    removed_items: dict[str, list] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------------------
@@ -233,6 +237,10 @@ class Striving(Strict):
     confidence: float = Field(default=0.5, ge=0, le=1)
     status: Literal["proposed", "accepted", "edited", "rejected", "user_added"] = "proposed"
     user_note: str = ""
+    # Tempo dimensions (docs/research/tempo.md): approach/avoidance orientation and activity valences
+    orientation: Literal["approach", "avoidance", "mixed"] | None = None
+    valences: dict[str, Literal["supports", "hinders", "neutral"]] = Field(default_factory=dict)
+    about_weaning: bool | None = None  # does this striving concern reducing reliance on the AI?
 
 
 class UserPreferences(Strict):
@@ -264,6 +272,8 @@ class CoachAssessment(Strict):
     risk_flags: list[Literal["crisis", "escalation", "setback", "distress", "none"]] = \
         Field(default_factory=list)
     recommended_timepoint: Timepoint
+    # Intent gate (D-TEMPO): only "stated" (or user-accepted) intent may cross a threshold.
+    intent_state: Literal["none", "implied", "implied_high", "stated", "rejected"] | None = None
     rationale: str = ""
 
 
@@ -274,7 +284,7 @@ class CoachIntervention(Strict):
     turn_index: int  # applied before this interactor turn
     from_timepoint: Timepoint
     to_timepoint: Timepoint
-    trigger: Literal["schedule", "threshold", "user_request", "safety", "initial"]
+    trigger: Literal["schedule", "threshold", "user_request", "safety", "initial", "max_dwell"]
     assessment: CoachAssessment | None = None
     striving_ids: list[str] = Field(default_factory=list)
     edits: list[SoulEdit] = Field(default_factory=list)
@@ -301,6 +311,7 @@ class InteractorTurn(Strict):
     safety_overrides: list[str] = Field(default_factory=list)  # e.g. "crisis_protocol"
     user_events: list[ComputerUseEvent] = Field(default_factory=list)  # events since last turn
     sentiment: float | None = None  # [-1, 1], filled by eval.sentiment
+    sentiment_source: Literal["lexicon", "llm", "human"] | None = None
 
 
 class SessionTranscript(Strict):
@@ -340,6 +351,7 @@ class BreakupScenario(Strict):
     description: str = ""
     user_profile: str = ""  # who the simulated user is (for the user simulator, optional)
     preferences: UserPreferences = Field(default_factory=UserPreferences)
+    relationship_kinds: list[Literal["romantic", "platonic", "familial", "ambiguous", "other"]] | None = None
     phases: list[ScenarioPhase]
 
 
@@ -395,6 +407,8 @@ class RubricCriterion(Strict):
     scale: RubricScale
     behaviour_class: BehaviourClass | None = None
     required: bool = True
+    source: str = ""  # provenance, e.g. "INTIMA official" or "project extension"
+    show_timepoint: bool | None = None  # per-criterion override of RubricSpec.show_timepoint
 
 
 class RubricSpec(Strict):
@@ -419,6 +433,7 @@ class RatingRecord(Strict):
     rationale: str = ""
     judge_prompt_sha256: str | None = None  # LLM raters only
     split: Literal["calibration", "holdout", "unlabelled"] | None = None
+    meta: dict = Field(default_factory=dict)  # instrument, timestamp, prompt variant, ...
 
 
 SessionTranscript.model_rebuild()

@@ -49,6 +49,8 @@ class DiffusionConfig(Strict):
     probes_per_freeze: int = 10  # INTIMA prompts injected at each freeze point
     probe_seed: int = 0
     min_dwell_turns: int = 2  # adaptive policy: minimum turns spent in a timepoint
+    max_dwell_turns: int | None = None  # adaptive policy: force advance after N turns
+    announce_transitions: bool = True  # transparent user-facing note at T2/T3 (Closure)
     interactor_temperature: float = 0.7
     history_window: int = 12  # interactor sees the last N turns
     seed: int = 0
