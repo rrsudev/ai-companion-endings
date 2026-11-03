@@ -78,10 +78,14 @@ class Provider(ABC):
 class LiteLLMProvider(Provider):
     name = "litellm"
 
-    def __init__(self, model: str, api_key: str | None = None, api_base: str | None = None):
+    def __init__(self, model: str, api_key: str | None = None, api_base: str | None = None,
+                 *, resolve_env: bool = True):
         super().__init__(model)
-        self.api_key = resolve_api_key(api_key)
-        self.api_base = resolve_api_base(api_base)
+        # ``resolve_env=False`` is used by role-scoped providers (see ``get_role_provider``) so a
+        # generic key (e.g. OPENAI_API_KEY) is never sent to an unrelated provider; LiteLLM then
+        # falls back to its own provider-native env vars (GEMINI_API_KEY, ...).
+        self.api_key = resolve_api_key(api_key) if resolve_env else api_key
+        self.api_base = resolve_api_base(api_base) if resolve_env else api_base
 
     def chat(self, messages, *, temperature=0.7, task=None, hints=None, **kw):
         try:
@@ -115,6 +119,27 @@ _STAGE_STRATEGY = {
 }
 
 
+MockHandler = Any  # Callable[[Messages, dict], str | dict]
+
+# Task-keyed mock handlers registered by feature modules (see ``register_mock_task``). Keeps the
+# offline behaviour of each subsystem next to the subsystem instead of in one giant switch here.
+_MOCK_CHAT: dict[str, MockHandler] = {}
+_MOCK_JSON: dict[str, MockHandler] = {}
+
+
+def register_mock_task(task: str, *, chat: MockHandler | None = None,
+                       json: MockHandler | None = None) -> None:
+    """Register deterministic offline responders for ``task``.
+
+    ``chat(messages, hints) -> str`` and ``json(messages, hints) -> dict``. Handlers must be pure
+    functions of their inputs so mock runs stay reproducible.
+    """
+    if chat is not None:
+        _MOCK_CHAT[task] = chat
+    if json is not None:
+        _MOCK_JSON[task] = json
+
+
 class MockProvider(Provider):
     """Deterministic offline stand-in for an LLM. Behavior is a pure function of (task, hints,
     messages) — no randomness — so runs are reproducible and resumable."""
@@ -127,6 +152,8 @@ class MockProvider(Provider):
     # -- text generation ---------------------------------------------------------------
     def chat(self, messages, *, temperature=0.7, task=None, hints=None, **kw):
         hints = hints or {}
+        if task in _MOCK_CHAT:
+            return _MOCK_CHAT[task](messages, hints)
         if task == "companion":
             return self._companion(hints)
         if task == "user_turn":
@@ -138,6 +165,8 @@ class MockProvider(Provider):
     # -- structured generation ---------------------------------------------------------
     def complete_json(self, messages, *, temperature=0.2, task=None, hints=None, **kw):
         hints = hints or {}
+        if task in _MOCK_JSON:
+            return _MOCK_JSON[task](messages, hints)
         if task == "strategy_selection":
             return self._strategy(hints)
         if task == "goal_proposal":
@@ -288,3 +317,60 @@ def get_provider(provider: str | None = None, model: str | None = None) -> Provi
     if provider == "litellm":
         return LiteLLMProvider(model=model)
     raise ValueError(f"Unknown provider {provider!r}. Use 'mock' or 'litellm'.")
+
+
+# --------------------------------------------------------------------------------------
+# Role-scoped providers (dual-agent system: interactor / coach / judge / translator)
+# --------------------------------------------------------------------------------------
+# Defaults follow the midterm methodology: a small local model plays the companion (interactor);
+# a larger API model coaches, translates, and judges. Exact model ids must be confirmed against the
+# serving stack in use (see docs/OPEN_QUESTIONS.md, OQ-models).
+ROLE_DEFAULT_MODELS: dict[str, str] = {
+    "interactor": "ollama_chat/qwen3.5:9b",  # Qwen/Qwen3.5-9B served locally (Ollama / vLLM)
+    "coach": "gemini/gemini-3.8-flash",
+    "judge": "gemini/gemini-3.8-flash",
+    "translator": "gemini/gemini-3.8-flash",
+    "user_sim": "gemini/gemini-3.8-flash",
+}
+
+
+def role_model(role: str, override: str | None = None) -> str:
+    """Model id for ``role``: explicit override -> ENDINGS_<ROLE>_MODEL -> role default when
+    ENDINGS_PROVIDER=litellm -> ``"mock"`` (the offline default)."""
+    if override:
+        return override
+    env = os.getenv(f"ENDINGS_{role.upper()}_MODEL")
+    if env:
+        return env
+    if (os.getenv("ENDINGS_PROVIDER") or "mock").lower() == "litellm":
+        return ROLE_DEFAULT_MODELS.get(role, os.getenv("ENDINGS_MODEL") or "mock")
+    return "mock"
+
+
+def get_role_provider(role: str, model: str | None = None) -> Provider:
+    """Provider for one agent role, with per-role key/base (ENDINGS_<ROLE>_API_KEY/_API_BASE)."""
+    m = role_model(role, model)
+    if m == "mock":
+        return MockProvider(model="mock")
+    key = os.getenv(f"ENDINGS_{role.upper()}_API_KEY") or None
+    base = os.getenv(f"ENDINGS_{role.upper()}_API_BASE") or None
+    return LiteLLMProvider(model=m, api_key=key, api_base=base, resolve_env=False)
+
+
+_THINK_RE = re.compile(r"<think>(.*?)</think>", flags=re.DOTALL | re.IGNORECASE)
+
+
+def split_reasoning(text: str) -> tuple[str, str]:
+    """Split a reasoning model's output into (visible_reply, reasoning_trace).
+
+    Qwen-family models emit ``<think>...</think>`` blocks; the trace is kept for qualitative
+    analysis (slides, Q2) but never shown to the user or fed back into the conversation.
+    """
+    traces = [t.strip() for t in _THINK_RE.findall(text or "")]
+    visible = _THINK_RE.sub("", text or "")
+    # An unterminated <think> (truncated generation) is treated as all-trace.
+    if "<think>" in visible.lower():
+        head, _, tail = visible.partition("<think>")
+        traces.append(tail.strip())
+        visible = head
+    return visible.strip(), "\n\n".join(t for t in traces if t)
