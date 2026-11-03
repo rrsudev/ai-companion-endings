@@ -394,3 +394,41 @@ towards holding.
 **Consequences for analysis.** `intent_state == "rejected"` can now occur on a striving whose
 model label is `about_weaning=False`; when reporting lexicon-vs-label agreement (D-TEMPO-14),
 report rejected items separately. Offline (mock) outputs are unchanged.
+
+## Amendments: review fixes (2026-11-03)
+
+## D-TEMPO-16: Fail-soft inference and assessment; strict boolean parsing
+
+**Decision.** `infer_strivings` catches any provider exception (malformed JSON, refusal text,
+network/Modal timeout), records `tempo_infer error: <type>: <msg>` in `last_report.notes` and
+returns deep copies of `existing` unchanged. `assess` catches the same and validates `{}`, which
+yields a hold at the current timepoint with no threshold (`tempo_assess error` in the notes, so
+the session's `tempo_report` event records it). `threshold_reached` is parsed strictly
+(`_strict_bool`: true / "true" / "yes" / 1 only), so the string "false" is no longer truthy.
+
+**Alternatives.** Retry inside the model (belongs in the provider layer: `num_retries`); abort the
+session (lost all prior sessions' results in `run_experiment`).
+
+**Rationale.** Mirrors the planner's fail-soft rule (D-PLANNER-8): one malformed reply must not
+abort an experiment, and the safe default for a failed assessment is "hold".
+
+**Consequences for analysis.** Count `tempo_* error` notes per model and report them; a failed
+assessment is indistinguishable from a "hold" in the policy, but not in the trace.
+
+## D-TEMPO-17: Scripted co-creation edits are resolved by text (R11, R9)
+
+**Decision.** `TempoCoachModel.resolve_scripted_edits(strivings, scripted)` maps scenario-scripted
+edits (`op` in accept/reject/edit/add, `match` = case-insensitive substring of the striving text,
+optional `level`, `text`, `note`; dicts or objects) to `StrivingEdit`s, using the first matching
+striving not already used by an earlier item. Unmatched items are returned (for a
+`striving_edit_unmatched` trace), not raised, because inference varies between runs. An `add`
+whose text already matches an existing striving is skipped, so re-applying a script is idempotent.
+The result is passed to the existing `apply_user_edits`; `LOCKED_STATUSES` keeps the decisions
+across later inference passes.
+
+**Alternatives.** Script edits by id (ids are content hashes unknown to scenario authors).
+
+**Status.** The contract field (`ScenarioPhase.striving_edits`), the session call right after
+`infer_strivings` at the first turn of each phase, and scenario data are owned by other areas and
+requested there; until they land, R11's "users may edit inferred goals" is exercised only in unit
+tests.

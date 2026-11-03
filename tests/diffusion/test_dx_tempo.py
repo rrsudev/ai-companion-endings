@@ -598,3 +598,101 @@ def test_postprocess_validates_dimensions():
                                                        text="The user wants nightly chats")])
     assert edited[0].about_weaning is None and a.about_weaning is True
     assert "about_weaning" in tempo.INFER_SCHEMA and "valences" in tempo.INFER_SCHEMA
+
+
+# --------------------------------------------------------------------------------------
+# Fix-round additions (D-TEMPO-16, D-TEMPO-17)
+# --------------------------------------------------------------------------------------
+class RaisingProvider(Provider):
+    """Simulates a malformed Gemini reply / network error on every JSON call."""
+
+    def __init__(self, exc: Exception):
+        super().__init__("raising")
+        self.exc = exc
+
+    def chat(self, messages, **kw):
+        raise self.exc
+
+    def complete_json(self, messages, **kw):
+        raise self.exc
+
+
+@pytest.mark.parametrize("exc", [ValueError("I cannot help with that."),
+                                 TimeoutError("modal timeout")])
+def test_infer_and_assess_fail_soft(exc):
+    model = TempoCoachModel(RaisingProvider(exc))
+    prior = [Striving(id="s-acc", text="Call my sister", status="accepted",
+                      inferred_from="user_added")]
+    out = model.infer_strivings(observations=[], turns=TURNS, preferences=UserPreferences(),
+                                existing=prior)
+    assert out == prior and out[0] is not prior[0]
+    assert any("tempo_infer error" in n for n in model.last_report.notes)
+    a = model.assess(strivings=out, observations=[], turns=TURNS,
+                     current_timepoint=Timepoint.T1, preferences=UserPreferences())
+    assert not a.threshold_reached and a.recommended_timepoint == Timepoint.T1
+    assert any("tempo_assess error" in n for n in model.last_report.notes)
+
+
+def test_real_json_decode_error_from_provider_is_contained():
+    class Chatty(Provider):
+        def chat(self, messages, **kw):
+            return 'Sure! Here is the JSON: {"strivings": []} and also {"x":1}'
+
+    model = TempoCoachModel(Chatty("x"))
+    assert model.infer_strivings(observations=[], turns=TURNS, preferences=UserPreferences(),
+                                 existing=[]) == []
+
+
+@pytest.mark.parametrize("value,expected", [("false", False), ("False", False), ("no", False),
+                                            ("true", True), (True, True), (1, True), (0, False),
+                                            ("maybe", False), (None, False)])
+def test_threshold_reached_is_parsed_strictly(value, expected):
+    raw = _raw()
+    raw["threshold_reached"] = value
+    a = validate_assessment(raw, current=Timepoint.T0, preferences=UserPreferences(),
+                            gate=STATED, index=_index(TURNS))
+    assert a.threshold_reached is expected
+    assert a.recommended_timepoint == (Timepoint.T1 if expected else Timepoint.T0)
+
+
+def test_scripted_striving_edits_resolve_by_text_and_flow_to_planner():
+    from endings.diffusion.coach.planner import CoachPlanner, build_messages, eligible_strivings
+    from endings.diffusion.schemas import (CompanionPersona, SoulDocument,
+                                           SoulDocumentVersion)
+
+    stated = [
+        Striving(id="str-aaa", text="The user is reconnecting with friends and family offline",
+                 level="goal", inferred_from="stated"),
+        Striving(id="str-bbb", text="The user is seeking comfort in lonely moments",
+                 level="striving", inferred_from="stated"),
+    ]
+    scripted = [{"op": "reject", "match": "seeking comfort"},
+                {"op": "accept", "match": "RECONNECTING", "level": "goal"},
+                {"op": "edit", "match": "no such striving", "text": "x"},
+                {"op": "add", "text": "Call my sister every Sunday", "note": "mine"}]
+    model = TempoCoachModel(MockProvider())
+    edits, unmatched = model.resolve_scripted_edits(stated, scripted)
+    assert [(e.op, e.striving_id) for e in edits] == [
+        ("reject", "str-bbb"), ("accept", "str-aaa"), ("add", None)]
+    assert unmatched == [{"op": "edit", "match": "no such striving", "level": None}]
+    out = model.apply_user_edits(stated, edits)
+    status = {s.text: s.status for s in out}
+    assert status["The user is seeking comfort in lonely moments"] == "rejected"
+    assert status["Call my sister every Sunday"] == "user_added"
+    assert "str-bbb" not in {s.id for s in eligible_strivings(out)}
+    # Re-applying the same script is idempotent (the add is not duplicated).
+    again, _ = model.resolve_scripted_edits(out, scripted)
+    assert sum(e.op == "add" for e in again) == 0
+
+    doc = SoulDocument(id="d", title="t", companion=CompanionPersona(name="Rin"))
+    version = SoulDocumentVersion(version=1, timepoint=Timepoint.T1, document=doc)
+    iv = CoachPlanner(MockProvider()).plan(
+        version=version, from_timepoint=Timepoint.T1, to_timepoint=Timepoint.T2,
+        trigger="schedule", turn_index=8, assessment=None, strivings=out,
+        preferences=UserPreferences(), intervention_id="iv")
+    assert "str-bbb" not in iv.striving_ids and iv.striving_ids
+    assert not any("comfort" in d for d in iv.interactor_directives)
+    msgs, _ = build_messages(version=version, from_timepoint=Timepoint.T1,
+                             to_timepoint=Timepoint.T2, scheduled=[], assessment=None,
+                             strivings=eligible_strivings(out), preferences=UserPreferences())
+    assert "str-bbb" not in msgs[1]["content"] and "seeking comfort" not in msgs[1]["content"]

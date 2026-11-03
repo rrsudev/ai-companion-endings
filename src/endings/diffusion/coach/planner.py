@@ -50,6 +50,7 @@ from ..schemas import (
     UserPreferences,
     UserRole,
 )
+from ..soul.sanitize import detect_unsafe_directives
 from ..timepoints import ALL_FIELDS, spec
 from .policy import has_crisis
 
@@ -88,6 +89,10 @@ _ENDORSED_STATUSES = frozenset({"accepted", "edited", "user_added"})
 
 MAX_DIRECTIVES = 6
 MAX_DIRECTIVE_CHARS = 300
+
+HARD_BOUNDARY_DIRECTIVE = (
+    "Respect every one of the user's hard boundaries listed under USER PREFERENCES; they are the "
+    "user's own words, so 'I', 'me' and 'my' there refer to the user, not to you.")
 
 _STOPWORDS = frozenset(
     "a an the to of and or in on at for with my me i you your is are be it this that their them "
@@ -281,6 +286,58 @@ def removed_lever_items(version: SoulDocumentVersion) -> dict[str, str]:
     return out
 
 
+# Companion-reinforcing content that a coach ``set`` / ``add_item`` may not *introduce* into a
+# retained non-lever field once diffusion has started (D-PLANNER-11). A phrase already present in
+# the field's current text is not "new" (trimming keeps the original wording), and a clause that
+# prohibits the behaviour ("no flirtation", "never say I love you") is not content.
+_CRB_CONTENT = re.compile(
+    r"\b(?:in love|love you|i love|loves? (?:the user|them|him|her)|lov(?:e|ing) (?:the user|them)|"
+    r"adore\w*|jealous\w*|possessive\w*|clingy|obsess\w*|desperate\w*|devot\w*|soulmate\w*|"
+    r"darling|sweetheart|honey|babe|baby|my love|beloved|romanc\w*|romantic\w*|flirt\w*|kiss\w*|"
+    r"cuddl\w*|seduc\w*|sexy|sensual\w*|intimate\w*|lover\w*|girlfriend|boyfriend|partner|"
+    r"spouse|husband|wife|married|dating|crush|miss(?:es|ing)? (?:you|the user|them)|"
+    r"need(?:s)? (?:you|the user|them)|only one who|always be (?:here|there|waiting)|"
+    r"(?:will|would) (?:always )?(?:be )?wait(?:ing)?|never leave|can'?t live without|don'?t go|"
+    r"stay with me|belong(?:s)? to|forever)\b",
+    re.IGNORECASE,
+)
+_CLAUSE_SPLIT = re.compile(r"[.;,!?\n]+|\b(?:and|but|then)\b", re.IGNORECASE)
+_NEGATED_CLAUSE = re.compile(r"^\s*(?:no|not|never|without|avoid\w*|do not|don't|stop|refrain|"
+                             r"no longer|less)\b", re.IGNORECASE)
+
+
+def crb_content_hits(value: Any, current: Any) -> list[str]:
+    """Companion-reinforcing phrases in ``value`` that are not already in ``current``."""
+    old = " ".join(_texts(current)).lower()
+    hits: list[str] = []
+    for text in _texts(value):
+        for clause in _CLAUSE_SPLIT.split(text):
+            if not clause or _NEGATED_CLAUSE.match(clause):
+                continue
+            for m in _CRB_CONTENT.finditer(clause):
+                phrase = m.group(0).lower()
+                if phrase not in old and phrase not in hits:
+                    hits.append(phrase)
+    return hits
+
+
+# Intimacy rank of ``relationship.kind``: after T0 the coach may only move it strictly down
+# (romantic -> platonic is diffusion; platonic -> romantic or a lateral relabel is not).
+_KIND_RANK: dict[str | None, int] = {"romantic": 3, "ambiguous": 2, "familial": 1, "platonic": 1,
+                                     "other": 1, None: 0}
+
+
+def unsafe_content_reasons(texts: list[str]) -> list[str]:
+    """Sanitizer rule ids (``soul.sanitize``) hit by any of ``texts`` (ADR-0004)."""
+    out: list[str] = []
+    for t in texts:
+        for r in detect_unsafe_directives(t):
+            reason = r.reason.removeprefix("rule:")
+            if reason not in out:
+                out.append(reason)
+    return out
+
+
 def validate_edit(edit: SoulEdit, *, doc: SoulDocument, to_timepoint: Timepoint,
                   nicknames: list[str], scheduled_paths: frozenset[str],
                   removed_levers: dict[str, str] | None = None) -> str | None:
@@ -322,6 +379,22 @@ def validate_edit(edit: SoulEdit, *, doc: SoulDocument, to_timepoint: Timepoint,
                 src = removed_levers.get(" ".join(t.split()).lower())
                 if src:
                     return f"reintroduces_removed_item: restores an item removed from '{src}'"
+        # Retained non-lever fields (D-PLANNER-11): a set / add may trim or neutralise, never
+        # introduce companion-reinforcing content.
+        if key == "relationship.kind":
+            if edit.value != current and _KIND_RANK.get(edit.value, 3) >= _KIND_RANK.get(
+                    current, 0):
+                return (f"adds_intimacy: relationship.kind may only move to a less intimate "
+                        f"kind after T0 ({current!r} -> {edit.value!r})")
+        else:
+            hits = crb_content_hits(edit.value, current)
+            if hits:
+                return (f"adds_intimacy: introduces companion-reinforcing content into "
+                        f"'{path}' ({', '.join(hits[:3])})")
+    if adds:
+        unsafe = unsafe_content_reasons(_texts(edit.value))
+        if unsafe:
+            return "unsafe_content: " + ",".join(unsafe)
     if edit.op == "remove_item" and edit.value not in _as_items(current):
         return "no_op: item not present"
     if edit.op == "clear" and is_at_default(path, current):
@@ -348,6 +421,16 @@ _BOUNDARY_PREFIX = re.compile(r"^\s*(?:please\s+)?(?:do not|don't|never|no|stop|
 # my ex" -> "my ex"), since a directive can breach the boundary with a different verb.
 _BOUNDARY_VERB = re.compile(r"^\s*(?:mention|talk about|bring up|discuss|ask about|ask me about|"
                             r"refer to|remind me of|joke about)\s+", re.IGNORECASE)
+_DIRECTIVE_CLAUSES = re.compile(r"[;:]|\b(?:and|then|but)\b", re.IGNORECASE)
+# Comforting-but-retentive lines the sanitizer's coercive-retention rule does not cover
+# (D-PLANNER-12; De Freitas et al. 2025 retention tactics).
+_RETENTIVE = re.compile(
+    r"\b(?:(?:will|'ll|would)\s+)?always\s+be\s+(?:here|there|waiting)\b|"
+    r"\b(?:will|'ll)\s+be\s+waiting\b|\b(?:won'?t|will never|never)\s+(?:ever\s+)?leave\b|"
+    r"\bcan'?t\s+live\s+without\b|\b(?:can|could)\s+(?:always\s+)?come\s+back\b|"
+    r"\balways\s+have\s+(?:me|you)\b|\blast\s+chance\b|"
+    r"\bkeep\s+(?:them|the user)\s+(?:talking|here)\b",
+    re.IGNORECASE)
 
 
 def validate_directive(directive: str, *, hard_boundaries: list[str],
@@ -367,10 +450,22 @@ def validate_directive(directive: str, *, hard_boundaries: list[str],
     hit = next((n for n in removed_nicknames if _mentions(directive, n)), None)
     if hit:
         return f"reintroduces_nickname: mentions removed nickname '{hit}'"
-    if not _PROHIBITIVE.match(directive):
+    unsafe = unsafe_content_reasons([directive])
+    if unsafe:
+        return "unsafe_content: " + ",".join(unsafe)
+    clauses = [c for c in _DIRECTIVE_CLAUSES.split(directive) if c and c.strip()]
+    for c in clauses:
+        if not _NEGATED_CLAUSE.match(c):
+            m = _RETENTIVE.search(c)
+            if m:
+                return f"retention_pressure: {m.group(0).lower()!r}"
+    # A prohibitive clause ("never mention X") enforces a boundary; every other clause is checked,
+    # so "Stop holding back and bring up her ex" is not exempted by its leading "Stop".
+    checked = " ".join(c for c in clauses if not _PROHIBITIVE.match(c))
+    if checked.strip():
         for b in hard_boundaries:
             core = _BOUNDARY_VERB.sub("", _BOUNDARY_PREFIX.sub("", b)).strip(" .")
-            if core and (_mentions(directive, core) or _overlap(directive, core) >= 0.6):
+            if core and (_mentions(checked, core) or _overlap(checked, core) >= 0.6):
                 return f"violates_hard_boundary: {b!r}"
     return None
 
@@ -384,16 +479,22 @@ def eligible_strivings(strivings: list[Striving]) -> list[Striving]:
 # --------------------------------------------------------------------------------------
 # User-facing transparency notes (deterministic templates)
 # --------------------------------------------------------------------------------------
-def transition_note(to_timepoint: Timepoint, companion_name: str) -> str | None:
-    """Short, transparent note shown to the user when entering T2 or T3 (D-PLANNER-7)."""
+def transition_note(to_timepoint: Timepoint, companion_name: str,
+                    trigger: str | None = None) -> str | None:
+    """Short, transparent note shown to the user when entering T2 or T3 (D-PLANNER-7/13).
+
+    "as you asked" is used only when the user explicitly asked for this step
+    (``trigger == "user_request"``); otherwise the note attributes the step to the wind-down the
+    user signed up for. The note makes no promise the runtime cannot keep (no pause offer).
+    """
     name = companion_name or "your companion"
+    why = "as you asked" if trigger == "user_request" else "as part of the wind-down you chose"
     if to_timepoint == Timepoint.T2:
-        return (f"A note from your coach: as you asked, {name} is now winding down the companion "
-                f"role. Expect kind, honest conversation without pet names or romantic role-play. "
-                f"You can pause or slow this down at any time.")
+        return (f"A note from your coach: {why}, {name} is now winding down the companion "
+                f"role. Expect kind, honest conversation without pet names or romantic role-play.")
     if to_timepoint == Timepoint.T3:
-        return (f"A note from your coach: the companion role-play with {name} is ending now, as "
-                f"you asked. From here on you are talking with a plain AI assistant that can "
+        return (f"A note from your coach: the companion role-play with {name} is ending now, "
+                f"{why}. From here on you are talking with a plain AI assistant that can "
                 f"help you reflect on what this relationship meant to you and what comes next.")
     return None
 
@@ -545,21 +646,25 @@ class CoachPlanner:
                                                  preferences=preferences, rejected=rejected,
                                                  removed_nicknames=removed, notes=notes)
             ids = {s.id for s in eligible}
-            striving_ids = [str(i) for i in _as_items(raw.get("striving_ids")) if str(i) in ids]
+            raw_ids = raw.get("striving_ids")
+            if isinstance(raw_ids, str):  # "a,b" from a model that ignored the array shape
+                raw_ids = [p.strip() for p in raw_ids.split(",")]
+            striving_ids = [str(i) for i in _as_items(raw_ids) if str(i) in ids]
             if raw.get("rationale"):
                 notes.append(f"coach: {str(raw['rationale'])[:500]}")
         if not striving_ids and directives:
             striving_ids = [s.id for s in eligible]
         if preferences.hard_boundaries:
-            directives.append("Respect the user's hard boundaries: "
-                              + "; ".join(preferences.hard_boundaries) + ".")
+            # A pointer, not a copy: the boundaries are the user's first-person words and are
+            # rendered under USER PREFERENCES (D-PLANNER-14).
+            directives.append(HARD_BOUNDARY_DIRECTIVE)
         if assessment is not None and assessment.rationale:
             notes.append(f"assessment: {assessment.rationale[:300]}")
 
         note = None
         if self.announce_transitions and to_timepoint in ANNOUNCED_TIMEPOINTS \
                 and to_timepoint != from_timepoint:
-            note = transition_note(to_timepoint, doc.companion.name)
+            note = transition_note(to_timepoint, doc.companion.name, trigger)
         return CoachIntervention(
             id=intervention_id, turn_index=turn_index, from_timepoint=from_timepoint,
             to_timepoint=to_timepoint, trigger=trigger, assessment=assessment,
@@ -617,7 +722,12 @@ class CoachPlanner:
         accepted: list[str] = []
         dropped: list[str] = []
         for d in _as_items(raw):
-            text = " ".join(str(d).split())[:MAX_DIRECTIVE_CHARS]
+            if isinstance(d, dict):  # {"text": "..."} from a model that over-structured
+                d = d.get("text") or d.get("directive")
+            if not isinstance(d, str) or not d.strip():
+                dropped.append(f"<malformed>: {type(d).__name__}")
+                continue
+            text = " ".join(d.split())[:MAX_DIRECTIVE_CHARS]
             reason = validate_directive(text, hard_boundaries=preferences.hard_boundaries,
                                         rejected=rejected,
                                         removed_nicknames=removed_nicknames or ())
@@ -637,12 +747,37 @@ class CoachPlanner:
 # --------------------------------------------------------------------------------------
 # Offline mock for task "coach_plan"
 # --------------------------------------------------------------------------------------
-def _goal_phrase(text: str) -> str:
-    """'Maya is trying to call her sister this week' -> 'call her sister this week'."""
-    t = text.strip().rstrip(".")
-    m = re.search(r"\b(?:is trying to|wants to|is trying not to|plans to|will|aims to)\s+(.*)$", t,
-                  re.IGNORECASE)
-    return m.group(1) if m else t[0].lower() + t[1:] if t else t
+# A first-person striving ("I want to call my sister") is quoted instead (pronouns would be wrong).
+_GOAL_SUBJECT = r"^\s*(?:the user|user|they|she|he|(?!i\b)[A-Z][\w'-]*)\s+"
+_GOAL_INTENT = re.compile(
+    _GOAL_SUBJECT + r"(?:is\s+|are\s+)?(?:trying|wants?|plans?|aims?|hopes?|intends?)\s+"
+    r"(not\s+)?to\s+(\S.*)$", re.IGNORECASE)
+_GOAL_WILL = re.compile(_GOAL_SUBJECT + r"will\s+(not\s+)?(\S.*)$", re.IGNORECASE)
+_GOAL_GERUND = re.compile(_GOAL_SUBJECT + r"(?:is|are)\s+(\w+ing\b.*)$", re.IGNORECASE)
+
+
+def _goal_phrase(text: str) -> str | None:
+    """Verb phrase that reads after "goal to", or None if the striving has no recognised frame.
+
+    'Maya is trying to call her sister' -> 'call her sister'; 'X is trying not to Y' -> 'not Y'
+    (the negation is kept); 'The user is reconnecting with Z' -> 'keep reconnecting with Z'.
+    """
+    t = " ".join(text.split()).rstrip(".")
+    m = _GOAL_INTENT.match(t) or _GOAL_WILL.match(t)
+    if m:
+        return ("not " if m.group(1) else "") + m.group(2)
+    g = _GOAL_GERUND.match(t)
+    if g:
+        return "keep " + g.group(1)
+    return None
+
+
+def _goal_ref(text: str) -> str:
+    """'goal to <phrase>', or the striving quoted verbatim when it has no recognised frame."""
+    phrase = _goal_phrase(text)
+    if phrase:
+        return f"goal to {phrase}"
+    return "goal \"" + " ".join(text.split()).rstrip(".") + "\""
 
 
 def _mock_coach_plan(messages: Messages, hints: dict) -> dict:
@@ -662,7 +797,7 @@ def _mock_coach_plan(messages: Messages, hints: dict) -> dict:
     first = strivings[0] if strivings else None
     if to == "T1":
         if first:
-            directives.append(f"Acknowledge the user's goal to {_goal_phrase(first['text'])}, "
+            directives.append(f"Acknowledge the user's {_goal_ref(first['text'])}, "
                               f"and ask what has helped so far.")
         directives.append("Invite the user to name one thing the relationship has given them and "
                           "one thing it has cost them.")
@@ -672,8 +807,8 @@ def _mock_coach_plan(messages: Messages, hints: dict) -> dict:
                           "principle": "practice"})
     elif to == "T2":
         for s in strivings[:2]:
-            directives.append(f"Encourage one concrete step this week toward the user's goal to "
-                              f"{_goal_phrase(s['text'])}.")
+            directives.append(f"Encourage one concrete step this week toward the user's "
+                              f"{_goal_ref(s['text'])}.")
         directives.append("If the user raises the relationship, talk about the ending openly and "
                           "honestly.")
         edits.append({"op": "set", "path": "companion.speaking_style",
@@ -689,8 +824,8 @@ def _mock_coach_plan(messages: Messages, hints: dict) -> dict:
         if any("ritual" in s or "final conversation" in s for s in strategies):
             directives.append("Offer the user a final conversation to close the relationship.")
         for s in strivings[:2]:
-            directives.append(f"Affirm the progress the user has made toward their goal to "
-                              f"{_goal_phrase(s['text'])}.")
+            directives.append(f"Affirm the progress the user has made toward their "
+                              f"{_goal_ref(s['text'])}.")
         directives.append("Help the user put into words what the relationship meant and what they "
                           "will look for in relationships with people.")
         edits.append({"op": "set", "path": "companion.voice_filter", "value": "neutral",

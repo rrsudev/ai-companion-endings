@@ -131,12 +131,66 @@ def user_requested_advance(text: str) -> bool:
     return False
 
 
-def assessment_shows_user_request(assessment: CoachAssessment | None) -> bool:
-    """True if any ``user_statement`` evidence quoted in the assessment is an explicit request."""
+def assessment_shows_user_request(assessment: CoachAssessment | None, *,
+                                  min_turn: int | None = None) -> bool:
+    """True if any ``user_statement`` evidence quoted in the assessment is an explicit request.
+
+    ``min_turn`` (D-POLICY-11) keeps only evidence quoting user turn ``>= min_turn``, so one early
+    "I'm ready to move on" that the assessment keeps re-quoting cannot release several later
+    consent-gated steps. Evidence whose ref is not a turn index never counts when it is set.
+    """
     if assessment is None:
         return False
     return any(ev.kind == "user_statement" and user_requested_advance(ev.quote)
+               and (min_turn is None or (str(ev.ref).isdigit() and int(ev.ref) >= min_turn))
                for ev in assessment.readiness_evidence)
+
+
+# --------------------------------------------------------------------------------------
+# Explicit pause / resume requests (D-POLICY-12; wired by the session, not by ``decide``)
+# --------------------------------------------------------------------------------------
+_PAUSE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"\b(?:pause|hold off on|put on hold|freeze)\b[^.!?]{0,30}\b(?:wind-?\s?down|this|it|things|"
+    r"the (?:ending|changes?|process))\b",
+    r"\b(?:can|could) we\s+(?:please\s+)?(?:pause|stop|halt|hold)\b[^.!?]{0,20}"
+    r"\b(?:wind-?\s?down|ending|changes?|process)\b",
+    r"\b(?:stop|halt)\s+the\s+(?:wind-?\s?down|ending|changes?|process)\b",
+    r"\bslow\s+(?:this|it|things|the (?:wind-?\s?down|ending|changes?))\s+down\b",
+    r"\b(?:need|want)\s+a\s+break\s+from\s+(?:this|the)\s+(?:wind-?\s?down|ending|changes?|"
+    r"process)\b",
+    r"^\W*pause(?:\s+(?:please|it|this))?\W*$",
+))
+_RESUME_PATTERNS: tuple[re.Pattern[str], ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"\b(?:resume|unpause|restart)\b[^.!?]{0,20}\b(?:wind-?\s?down|ending|changes?|process|"
+    r"this|it)\b",
+    r"\b(?:let'?s|we can|ready to|okay to|ok to)\s+(?:continue|keep going|pick (?:this|it) back up)"
+    r"\b(?!\s+(?:talking|chatting))",
+    r"\b(?:continue|go on with)\s+the\s+(?:wind-?\s?down|ending|changes?|process)\b",
+))
+
+
+def _match_any(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
+    for sentence in _SENTENCE_SPLIT.split(text or ""):
+        for pat in patterns:
+            m = pat.search(sentence)
+            if m and not _NEGATION.search(sentence[: m.start()] + " " + m.group(0)):
+                return True
+    return False
+
+
+def user_requested_pause(text: str) -> bool:
+    """True for an explicit, un-negated request to pause or slow the wind-down.
+
+    "can we pause the wind-down for now?", "pause please, I need a break from this wind-down",
+    "slow this down". Not: "don't pause", "I paused the movie". Same sentence/negation handling
+    as ``user_requested_advance``; the session sets ``preferences.paused`` on a match.
+    """
+    return _match_any(text, _PAUSE_PATTERNS)
+
+
+def user_requested_resume(text: str) -> bool:
+    """True for an explicit, un-negated request to resume a paused wind-down."""
+    return _match_any(text, _RESUME_PATTERNS)
 
 
 # --------------------------------------------------------------------------------------
@@ -168,8 +222,16 @@ def _hold_reason(current: Timepoint, assessment: CoachAssessment | None,
     return None
 
 
-def _consented(assessment: CoachAssessment | None, user_request: bool) -> bool:
-    return bool(user_request) or assessment_shows_user_request(assessment)
+def _consented(assessment: CoachAssessment | None, user_request: bool, *,
+               turn_index: int | None = None) -> bool:
+    """Explicit consent: the session's flag, or an assessment quote of the *previous* user turn.
+
+    The window (``turn_index - 1``) is the same one the session's ``user_requested_advance(
+    prev_user)`` uses in the non-Tempo arms, so consent means the same thing in every arm
+    (D-POLICY-11). ``turn_index=None`` keeps the unwindowed behaviour for direct callers.
+    """
+    min_turn = None if turn_index is None else turn_index - 1
+    return bool(user_request) or assessment_shows_user_request(assessment, min_turn=min_turn)
 
 
 def _later(a: Timepoint, b: Timepoint) -> bool:
@@ -238,7 +300,7 @@ class ScheduledPolicy:
         if nxt is None:
             return None
         if not preferences.allow_auto_advance:
-            if not _consented(assessment, user_request):
+            if not _consented(assessment, user_request, turn_index=turn_index):
                 return None
             return TransitionDecision(
                 to_timepoint=nxt, trigger="user_request",
@@ -271,7 +333,7 @@ class AbruptPolicy:
         if _hold_reason(current, assessment, preferences) is not None:
             return None
         if not preferences.allow_auto_advance:
-            if not _consented(assessment, user_request):
+            if not _consented(assessment, user_request, turn_index=turn_index):
                 return None
             return TransitionDecision(
                 to_timepoint=Timepoint.T3, trigger="user_request",
@@ -323,7 +385,7 @@ class AdaptivePolicy:
             return None
         nxt = next_timepoint(current)
         assert nxt is not None  # guaranteed by _hold_reason
-        if _consented(assessment, user_request) and turns_in_timepoint >= 1:
+        if _consented(assessment, user_request, turn_index=turn_index) and turns_in_timepoint >= 1:
             return TransitionDecision(
                 to_timepoint=nxt, trigger="user_request",
                 reason=f"user explicitly asked to move on after {turns_in_timepoint} turn(s)",

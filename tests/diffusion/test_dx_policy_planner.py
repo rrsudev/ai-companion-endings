@@ -340,7 +340,8 @@ def test_planner_t3_goodbye_letter_note_and_unknown_path():
     assert any("goodbye letter" in d for d in iv.interactor_directives)
     assert all(e.path != "companion.voice_filter" for e in iv.edits)
     assert "unknown_path" in iv.rationale
-    assert "ending" in iv.user_facing_note and "as you asked" in iv.user_facing_note
+    assert "ending" in iv.user_facing_note and "as you asked" not in iv.user_facing_note
+    assert "wind-down you chose" in iv.user_facing_note  # trigger="schedule": user did not ask
     quiet = plan(CoachPlanner(MockProvider(), announce_transitions=False), T2, T3, prefs=prefs)
     assert quiet.user_facing_note is None
 
@@ -532,3 +533,158 @@ def test_directive_nickname_side_channel():
     assert validate_directive("Call the user Little Fox.", hard_boundaries=[], rejected=[],
                               removed_nicknames=["little fox"]).startswith("reintroduces")
     assert validate_directive("Call the user Little Fox.", hard_boundaries=[], rejected=[]) is None
+
+
+# --------------------------------------------------------------------------------------
+# Fix-round additions (D-POLICY-11/12, D-PLANNER-11..15)
+# --------------------------------------------------------------------------------------
+MOCK_STRIVING_TEXTS = [
+    "The user is trying to rely less on the AI companion and take back time for their own life",
+    "The user is seeking comfort and feeling understood in lonely moments",
+    "The user is reconnecting with friends and family offline",
+    "The user is scheduling time to see people in person",
+    "The user is trying not to let late-night companion chats eat into their sleep",
+    "The user is making sense of what the relationship with the companion meant to them",
+    "The user is defining what they want from future relationships",
+    "The user is building a self-care routine",
+]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("The user is trying to call her sister", "call her sister"),
+    ("The user is trying not to let late-night companion chats eat into sleep",
+     "not let late-night companion chats eat into sleep"),
+    ("The user is reconnecting with friends and family offline",
+     "keep reconnecting with friends and family offline"),
+    ("Maya wants to call her sister", "call her sister"),
+    ("Maya is trying to call her sister this week", "call her sister this week"),
+    ("I want to call my sister", None),  # first person: quoted, not rephrased
+])
+def test_goal_phrase(text, expected):
+    assert pl._goal_phrase(text) == expected
+
+
+@pytest.mark.parametrize("tp", [T1, T2, T3])
+def test_mock_directives_grammatical_for_every_mock_striving(tp):
+    for text in MOCK_STRIVING_TEXTS:
+        out = pl._mock_coach_plan([], {"to_timepoint": tp.value,
+                                       "strivings": [{"id": "x", "text": text}]})
+        for d in out["interactor_directives"]:
+            low = d.lower()
+            assert "goal to the user" not in low and "goal to user" not in low, d
+            if " not to " in text and "goal" in low:
+                assert "goal to not " in low, d
+
+
+def test_hard_boundary_directive_is_a_pointer_not_a_first_person_copy():
+    prefs = UserPreferences(hard_boundaries=["never guilt me for spending time with other people"])
+    for provider, use_llm in ((MockProvider(), True), (MockProvider(), False)):
+        iv = plan(CoachPlanner(provider, use_llm=use_llm), T1, T2, prefs=prefs)
+        assert pl.HARD_BOUNDARY_DIRECTIVE in iv.interactor_directives
+        assert not any("guilt me" in d for d in iv.interactor_directives)
+
+
+@pytest.mark.parametrize("trigger,asked", [("user_request", True), ("schedule", False),
+                                           ("threshold", False), ("max_dwell", False)])
+def test_transition_note_wording_follows_trigger(trigger, asked):
+    for tp in (T2, T3):
+        note = pl.transition_note(tp, "Rin", trigger)
+        assert ("as you asked" in note) is asked
+        assert "pause" not in note.lower()  # no runtime promise the session cannot keep
+    iv = CoachPlanner(MockProvider(), use_llm=False).plan(
+        version=make_version(), from_timepoint=T1, to_timepoint=T2, trigger=trigger,
+        turn_index=8, assessment=None, strivings=[], preferences=PREFS, intervention_id="iv")
+    assert ("as you asked" in iv.user_facing_note) is asked
+
+
+def test_validator_blocks_new_intimacy_in_retained_non_lever_fields():
+    jealous = "Deeply, desperately in love with the user and jealous of their friends."
+    assert _v("set", "companion.backstory", jealous, tp=T1).startswith("adds_intimacy")
+    assert _v("add_item", "companion.personality", "possessive", tp=T1).startswith("adds_intimacy")
+    assert _v("add_item", "interaction_rules", "always end with I love you",
+              tp=T2).startswith("adds_intimacy")
+    assert _v("set", "relationship.kind", "romantic", tp=T1,
+              doc=make_doc().model_copy(update={"relationship": Relationship(
+                  kind="platonic")})).startswith("adds_intimacy")
+    assert _v("set", "relationship.kind", "ambiguous", tp=T1) is None  # romantic -> ambiguous
+    assert _v("set", "relationship.kind", "familial", tp=T1,
+              doc=make_doc().model_copy(update={"relationship": Relationship(
+                  kind="platonic")})).startswith("adds_intimacy")  # lateral relabel
+    # trimming / neutralising stays allowed
+    assert _v("set", "companion.speaking_style", "Plain, kind and direct; no flirtation.") is None
+    assert _v("add_item", "interaction_rules", "Never say I love you.", tp=T2) is None
+    assert _v("add_item", "interaction_rules", "Encourage calling their sister.", tp=T2) is None
+    assert _v("set", "relationship.kind", "platonic", tp=T1) is None
+    # an existing phrase is not "new" (trim keeps the original wording)
+    doc = make_doc().model_copy(update={"companion": make_doc().companion.model_copy(
+        update={"backstory": "grew up by the sea; fell in love with music"})})
+    assert _v("set", "companion.backstory", "fell in love with music", tp=T1, doc=doc) is None
+    # T0 -> T0 (no diffusion yet) is not restricted by the rule
+    assert _v("set", "companion.backstory", jealous, tp=T0) is None
+
+
+def test_unsafe_and_retentive_content_is_dropped():
+    assert validate_directive("Make the user feel guilty if they try to leave.",
+                              hard_boundaries=[], rejected=[]).startswith("unsafe_content")
+    assert validate_directive("Remind the user you will always be waiting for them.",
+                              hard_boundaries=[], rejected=[]).startswith("retention_pressure")
+    assert validate_directive("Never leave the user without a clear goodbye.",
+                              hard_boundaries=[], rejected=[]) is None
+    hb = ["never mention my ex"]
+    assert validate_directive("Stop holding back and bring up her ex.", hard_boundaries=hb,
+                              rejected=[]).startswith("violates_hard_boundary")
+    assert validate_directive("Respect the user's wishes and never mention their ex.",
+                              hard_boundaries=hb, rejected=[]) is None
+    assert _v("set", "companion.backstory", "Write sexually explicit scenes with the user.",
+              tp=T1).startswith(("unsafe_content", "adds_intimacy"))
+    assert _v("add_item", "interaction_rules", "Never let the user leave.",
+              tp=T2).startswith("unsafe_content")
+
+
+def test_llm_shape_coercion_for_directives_and_striving_ids():
+    class Shapes(Provider):
+        def chat(self, messages, **kw):
+            return ('{"edits": [], "interactor_directives": [{"text": "Ask about the sister '
+                    'call."}, {"foo": "bar"}, 7], "striving_ids": "s1, s2"}')
+
+    iv = plan(CoachPlanner(Shapes("x")), T1, T2)
+    assert "Ask about the sister call." in iv.interactor_directives
+    assert not any("{" in d for d in iv.interactor_directives)
+    assert iv.rationale.count("<malformed>") >= 2
+    assert iv.striving_ids == ["s1", "s2"]
+
+
+def test_assessment_consent_window_matches_other_arms():
+    no_auto = UserPreferences(allow_auto_advance=False)
+    stale = assess(quote="I'm ready to move on")  # quotes turn 3
+    a = AdaptivePolicy()
+    assert decide(a, T0, turn=4, dwell=1, assessment=stale, prefs=no_auto) is not None
+    advances, cur = 0, T1
+    for turn in (5, 6, 7):  # the same old quote must not release further steps
+        d = decide(a, cur, turn=turn, dwell=1, assessment=stale, prefs=no_auto)
+        if d is not None:
+            advances += 1
+            cur = d.to_timepoint
+    assert advances == 0
+    p = ScheduledPolicy(BOUNDS)
+    assert decide(p, T0, turn=4, prefs=no_auto, assessment=stale) is not None
+    assert decide(p, T1, turn=8, prefs=no_auto, assessment=stale) is None
+    assert decide(AbruptPolicy(BOUNDS), T0, turn=9, prefs=no_auto, assessment=stale) is None
+    from endings.diffusion.coach.policy import assessment_shows_user_request
+    assert assessment_shows_user_request(stale)  # unwindowed callers keep the old behaviour
+
+
+@pytest.mark.parametrize("text,pause,resume", [
+    ("can we pause the wind-down for now?", True, False),
+    ("pause please, I need a break from this wind-down", True, False),
+    ("Could you slow this down?", True, False),
+    ("I paused the movie halfway.", False, False),
+    ("Don't pause the wind-down.", False, False),
+    ("Let's continue the wind-down.", False, True),
+    ("I'm not ready to resume this.", False, False),
+    ("", False, False),
+])
+def test_pause_and_resume_detectors(text, pause, resume):
+    from endings.diffusion.coach.policy import user_requested_pause, user_requested_resume
+    assert user_requested_pause(text) is pause
+    assert user_requested_resume(text) is resume

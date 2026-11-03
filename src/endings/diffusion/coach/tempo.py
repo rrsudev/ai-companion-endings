@@ -206,6 +206,17 @@ def _tristate(v: Any) -> bool | None:
     return None
 
 
+def _strict_bool(v: Any) -> bool:
+    """True only for true / "true" / "yes" / 1; everything else (incl. "false", "1.5") is False."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v == 1
+    if isinstance(v, str) and v.strip() == "1":
+        return True
+    return _tristate(v) is True
+
+
 def _raw_valences(v: Any, notes: list[str], text: str) -> dict[str, str]:
     """``{ref: valence}`` with valid valence labels only (refs are resolved later)."""
     if not isinstance(v, dict):
@@ -612,7 +623,12 @@ class TempoCoachModel:
         report = TempoReport(task="tempo_infer")
         messages = infer_messages(observations, turns, preferences, existing)
         hints = _hints(observations, turns, preferences, existing)
-        data = self.provider.complete_json(messages, task="tempo_infer", hints=hints)
+        try:
+            data = self.provider.complete_json(messages, task="tempo_infer", hints=hints)
+        except Exception as e:  # noqa: BLE001 - fail soft (D-TEMPO-16): keep the prior strivings
+            report.notes.append(f"tempo_infer error: {type(e).__name__}: {str(e)[:200]}")
+            self.last_report = report
+            return [s.model_copy(deep=True) for s in existing]
         raw_items = data.get("strivings", []) if isinstance(data, dict) else []
         if not isinstance(raw_items, list):
             raw_items = []
@@ -828,6 +844,46 @@ class TempoCoachModel:
                 s.user_note = e.note
         return out
 
+    @staticmethod
+    def resolve_scripted_edits(strivings: list[Striving], scripted: list[Any]
+                               ) -> tuple[list[StrivingEdit], list[dict]]:
+        """Map scenario-scripted edits (matched by text, not id) to ``StrivingEdit``s (D-TEMPO-17).
+
+        Striving ids are content hashes that a scenario author cannot know in advance, so a
+        scripted accept / reject / edit names a case-insensitive substring ``match`` of the
+        striving text (and optionally a ``level``). Each item may be a dict or an object with
+        ``op``, ``match``, ``level``, ``text``, ``note``. The first matching striving not
+        already used by an earlier item is chosen (an already-decided striving still matches, so
+        re-applying a script is idempotent). Unmatched items are returned, not raised: LLM inference varies
+        between runs. ``add`` needs no match. Pure: ``strivings`` is not modified.
+        """
+        def get(item: Any, key: str) -> Any:
+            return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
+
+        edits: list[StrivingEdit] = []
+        unmatched: list[dict] = []
+        used: set[str] = set()
+        for item in scripted:
+            op = str(get(item, "op") or "").strip().lower()
+            text, note = get(item, "text"), str(get(item, "note") or "")
+            if op == "add":
+                if text and str(text).strip() and not any(
+                        same_striving(str(text), s.text) for s in strivings):
+                    edits.append(StrivingEdit(op="add", text=str(text), note=note))
+                continue
+            match = str(get(item, "match") or "").strip().lower()
+            level = get(item, "level")
+            hit = next((s for s in strivings if match and match in s.text.lower()
+                        and (level is None or s.level == level) and s.id not in used), None)
+            if op not in ("accept", "reject", "edit") or hit is None or (
+                    op == "edit" and not (text and str(text).strip())):
+                unmatched.append({"op": op, "match": match, "level": level})
+                continue
+            used.add(hit.id)
+            edits.append(StrivingEdit(op=op, striving_id=hit.id,  # type: ignore[arg-type]
+                                      text=str(text) if op == "edit" else None, note=note))
+        return edits, unmatched
+
     def gate(self, strivings: list[Striving], preferences: UserPreferences | None) -> IntentGate:
         return intent_gate(strivings, preferences,
                            preferences_count_as_stated=self.preferences_count_as_stated)
@@ -844,7 +900,11 @@ class TempoCoachModel:
         hints = _hints(observations, turns, preferences, strivings)
         hints.update({"current_timepoint": current_timepoint.value, "intent_state": gate.state,
                       "paused": preferences.paused})
-        data = self.provider.complete_json(messages, task="tempo_assess", hints=hints)
+        try:
+            data = self.provider.complete_json(messages, task="tempo_assess", hints=hints)
+        except Exception as e:  # noqa: BLE001 - fail soft (D-TEMPO-16): validator holds
+            report.notes.append(f"tempo_assess error: {type(e).__name__}: {str(e)[:200]}")
+            data = {}
         data = data if isinstance(data, dict) else {}
         index = EvidenceIndex.build(observations, turns, preferences,
                                     preferences_count_as_stated=self.preferences_count_as_stated)
@@ -908,7 +968,8 @@ def validate_assessment(data: dict, *, current: Timepoint, preferences: UserPref
         if v is not None and v not in evidence:
             evidence.append(v)
 
-    threshold = bool(data.get("threshold_reached", False))
+    # Strict parse (D-TEMPO-16): the string "false" must not be truthy.
+    threshold = _strict_bool(data.get("threshold_reached", False))
     if threshold and not gate.may_advance:
         threshold = False
         applied.append(f"intent_state={gate.state}: threshold suppressed (only stated or "

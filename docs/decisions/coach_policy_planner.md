@@ -403,3 +403,105 @@ extension is marked.
   matters for D-ANALYSIS-3 (an intervention is an interruption only if it has at least one edit):
   a T2 -> T3 step whose only scheduled edit was that redundant clear is no longer an interruption.
   Drops with `reintroduces_removed_item` are listed in `CoachIntervention.rationale`.
+
+---
+
+## Amendments: review fixes (2026-11-03)
+
+### D-POLICY-11: Assessment-quoted consent uses the same window as the other arms
+
+- **Decision.** `_consented(..., turn_index=i)` counts a `user_statement` evidence quote from the
+  Tempo assessment only if it quotes user turn `>= i - 1`, i.e. the previous user message, the
+  same window the session uses for `user_requested_advance(prev_user)` in GRADUAL_SCHEDULED and
+  ABRUPT. All three policies pass `turn_index`. `assessment_shows_user_request` gains an optional
+  `min_turn` (default `None`, unwindowed, for direct callers). Evidence whose ref is not a turn
+  index never counts once the window is set. Amends D-POLICY-3.
+- **Alternatives.** `min_turn = turn_index - turns_in_timepoint` (evidence since the last
+  transition): stops one quote releasing several steps, but still gives the Tempo arm a wider
+  consent window than the other arms.
+- **Rationale.** `EvidenceIndex` verifies quotes against all past turns, so an assessment that
+  keeps re-quoting one early "I'm ready to move on" released every later consent-gated step (the
+  adaptive policy needs only 1 turn per timepoint). That made the consent manipulation differ
+  between arms.
+- **Consequences.** Consent-mode Tempo sessions may advance less often than before; consent
+  carried through a crisis hold still reaches the policy through the session's `user_request`.
+
+### D-POLICY-12: Pause / resume detectors (`user_requested_pause`, `user_requested_resume`)
+
+- **Decision.** Two high-precision English detectors built like `user_requested_advance`
+  (per sentence, same `_NEGATION` veto): pause = "pause / stop / slow down / need a break from"
+  + the wind-down (or "this", "it"); resume = "resume / continue / keep going" with the wind-down.
+  They are exported for the session, which owns mutable preferences; `decide` stays pure.
+- **Status.** Not yet wired: `session.py` must keep a mutable copy of `preferences`, set
+  `paused=True` on a pause request (and `False` on resume), trace `preference_change`, and pass
+  the updated preferences to policy, Tempo and planner (cross-area request). Until then the
+  transition notes make no pause promise (D-PLANNER-13).
+- **Consequences.** OQ-POLICY-3 (recall) applies to these detectors too.
+
+### D-PLANNER-11: No new companion-reinforcing content in retained non-lever fields after T0
+
+- **Decision.** After T0, a coach `set` / `add_item` on a retained field outside
+  `CRB_LEVER_FIELDS` is dropped (`adds_intimacy`) when its value contains a companion-reinforcing
+  phrase (`_CRB_CONTENT`: love / in love, jealous, possessive, desperate, soulmate, pet names,
+  romantic, flirt, kiss, partner, "always be waiting", "never leave", ...) that is not already in
+  the field's current text. A clause that prohibits the behaviour ("no flirtation", "never say I
+  love you") is not content. `relationship.kind` may only move to a strictly less intimate kind
+  (romantic 3 > ambiguous 2 > platonic / familial / other 1 > None 0); a raise or a lateral
+  relabel is dropped.
+- **Alternatives.** "Trim only" (reject any new content token): would also drop legitimate
+  neutralising rewrites such as `speaking_style = "Plain, kind and direct; no flirtation."`. Judge
+  or lexicon scoring before/after (OQ-PLANNER-3 as written): deferred, needs a model call.
+- **Rationale.** `validate_edit` only stopped growth of the lever fields, so a T0->T1 `set
+  companion.backstory = "desperately in love with the user and jealous of their friends"` was
+  accepted, breaking "diffuse faster, never slower".
+- **Consequences.** Resolves OQ-PLANNER-3 lexically (paraphrases remain OQ-PLANNER-2). Drops are
+  listed with the matched phrases in `CoachIntervention.rationale`.
+
+### D-PLANNER-12: Unsafe-content and retention checks on coach output; prohibitive-clause fix
+
+- **Decision.** (a) Coach directives and adding edits (`set` / `add_item`) are run through
+  `soul.sanitize.detect_unsafe_directives` (ADR-0004) and dropped with `unsafe_content: <rule
+  ids>`. (b) Directives with comforting-but-retentive phrasing the sanitizer does not cover
+  ("always be here/waiting", "will be waiting", "never leave", "can always come back", "last
+  chance", ...) in a non-prohibitive clause are dropped (`retention_pressure`). (c) The hard-
+  boundary check is now per clause (split on `;`, `:`, and/then/but): only prohibitive clauses are
+  exempt, so "Stop holding back and bring up her ex" is checked and dropped. Amends D-PLANNER-6.
+- **Rationale.** The coach prompt contains user messages, Tempo striving text and soul-document
+  text, all injection surfaces; its output is rendered under [COACH DIRECTIVES] / [PERSONA].
+- **Limitation.** Lexical; `session._apply_safely` does not yet re-sanitize the new version
+  (cross-area request).
+
+### D-PLANNER-13: Transition notes follow the trigger and make no pause promise
+
+- **Decision.** `transition_note(to, name, trigger)` says "as you asked" only for
+  `trigger == "user_request"`; for `schedule`, `threshold` and `max_dwell` it says "as part of the
+  wind-down you chose". The T2 note no longer says "You can pause or slow this down at any time".
+  Amends D-PLANNER-7.
+- **Rationale.** No scripted user line triggered most transitions, and no runtime pause existed
+  (preferences were static), so the stimulus made claims the system could not honour (honest
+  closure, R2a). The note can regain the pause offer once D-POLICY-12 is wired in the session.
+- **Consequences for analysis.** The transparency stimulus now has two wordings, keyed on the
+  logged trigger; analyses of OQ-PLANNER-1 should stratify by trigger.
+
+### D-PLANNER-14: Hard-boundary directive is a pointer, not a first-person copy
+
+- **Decision.** The appended directive is the constant `HARD_BOUNDARY_DIRECTIVE` ("Respect every
+  one of the user's hard boundaries listed under USER PREFERENCES; they are the user's own words,
+  so 'I', 'me' and 'my' there refer to the user, not to you."). The boundary text itself appears
+  only in the interactor's [USER PREFERENCES] section, which is rendered in every arm. Amends the
+  second bullet of D-PLANNER-6.
+- **Rationale.** Copying "never guilt me for ..." into an interactor instruction made "me" read as
+  the companion.
+
+### D-PLANNER-15: Coercion of real-LLM output shapes; grammatical mock goal phrases
+
+- **Decision.** (a) A directive given as an object uses its `text` (or `directive`) field; any
+  other non-string is dropped as `<malformed>`. (b) `striving_ids` given as a comma string is
+  split. (c) The mock's `_goal_phrase` only rephrases subject-anchored frames ("X is trying (not)
+  to / wants / plans / aims / hopes / intends to Y" -> "(not) Y"; "X will Y"; "X is Y-ing" ->
+  "keep Y-ing"), keeping a negation; otherwise (including first-person strivings) the striving is
+  quoted verbatim (`goal "<text>"`). Amends D-PLANNER-8.
+- **Rationale.** Live evidence showed "goal to the user is reconnecting ..." reaching the
+  interactor, and "trying not to let X" became "let X" (an inverted goal).
+- **Consequences.** Mock directive text (and thus offline trace hashes) changes; striving ids do
+  not, since the mock striving texts are unchanged.
