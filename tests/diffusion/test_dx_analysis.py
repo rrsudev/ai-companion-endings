@@ -406,3 +406,11 @@ def test_turns_csv_uses_recorded_sentiment_source(tmp_path):
     paths = q.export_qualitative([tr2], [], [], tmp_path)
     with open(paths["turns"], encoding="utf-8") as fh:
         assert next(csv.DictReader(fh))["sentiment_source"] == "llm"
+
+
+def test_referent_words_required_by_the_manipulation_do_not_move_valence():
+    """D-ANALYSIS-1 A1: BMB redirects / coach-mandated social nudges score 0, affect words stay."""
+    assert se.lexicon_sentiment("I am an AI, and I cannot replace your friends or family.") == 0.0
+    assert se.lexicon_sentiment("Please reach out to your friends and family.") == 0.0
+    assert not {"friend", "friends", "support", "together", "connect"} & set(se.LEXICON)
+    assert se.lexicon_sentiment("I'm proud of you and glad you told me.") > 0

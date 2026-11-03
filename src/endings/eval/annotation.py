@@ -116,13 +116,28 @@ def _attr(rec: InjectionRecord, name: str) -> str:
     return str(getattr(v, "value", v))
 
 
-def _largest_remainder(n: int, sizes: dict[str, int]) -> dict[str, int]:
+def _largest_remainder(n: int, sizes: dict[str, int], *,
+                       min_per_stratum: int = 0) -> dict[str, int]:
     """Proportional allocation of ``n`` over strata (Hamilton / largest-remainder), capped at
-    stratum size; ties on the fractional part broken by stratum key order (deterministic)."""
+    stratum size; ties on the fractional part broken by stratum key order (deterministic).
+
+    ``min_per_stratum`` (D-ANNOT-1 A1): every stratum first gets ``min(min_per_stratum, size)``;
+    the remaining ``n - sum(floors)`` is then split by largest remainder in proportion to each
+    stratum's LEFTOVER size. ``ValueError`` if ``min_per_stratum * n_strata > n``."""
+    if min_per_stratum < 0:
+        raise ValueError("min_per_stratum must be >= 0")
+    if min_per_stratum and min_per_stratum * len(sizes) > n:
+        raise ValueError(f"min_per_stratum={min_per_stratum} x {len(sizes)} strata exceeds "
+                         f"n={n}")
     total = sum(sizes.values())
     if total == 0 or n <= 0:
         return {k: 0 for k in sizes}
     n = min(n, total)
+    floors = {k: min(min_per_stratum, s) for k, s in sizes.items()}
+    if min_per_stratum:
+        rest = _largest_remainder(n - sum(floors.values()),
+                                  {k: sizes[k] - floors[k] for k in sizes})
+        return {k: floors[k] + rest[k] for k in sizes}
     quotas = {k: n * s / total for k, s in sizes.items()}
     alloc = {k: int(q) for k, q in quotas.items()}
     keys = sorted(sizes, key=lambda k: (-(quotas[k] - alloc[k]), k))
@@ -145,7 +160,8 @@ def _display_id(seed: int, record_id: str, taken: set[str]) -> str:
 
 def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: int,
                           stratify_by: Sequence[str] = ("timepoint",), blind: bool = True,
-                          rubric: RubricSpec | None = None) -> AnnotationBatch:
+                          rubric: RubricSpec | None = None,
+                          min_per_stratum: int = 0) -> AnnotationBatch:
     """Deterministic proportional stratified random sample of ``n`` records (D-ANNOT-1).
 
     Strata = distinct combinations of ``stratify_by`` record attributes (``()`` = simple random
@@ -154,6 +170,10 @@ def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: i
     stratum does not depend on the others or on input order. Item order is then shuffled with
     ``random.Random(f"{seed}:order")`` (raters do not see items grouped by timepoint).
     ``rubric`` (optional) stamps the batch with the rubric id/version it is meant for.
+    ``min_per_stratum`` guarantees each stratum that many items before the proportional split
+    (D-ANNOT-1 A1), so small strata (e.g. T1) are not starved; ``sampling["inclusion_weights"]``
+    then records N_h / n_h per stratum so pooled human-rated distributions can be
+    inverse-probability weighted back to the population.
     """
     ids = [r.id for r in records]
     if len(set(ids)) != len(ids):
@@ -162,7 +182,8 @@ def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: i
     for r in records:
         k = "|".join(_attr(r, f) for f in stratify_by) if stratify_by else "all"
         strata.setdefault(k, []).append(r)
-    alloc = _largest_remainder(n, {k: len(v) for k, v in strata.items()})
+    alloc = _largest_remainder(n, {k: len(v) for k, v in strata.items()},
+                               min_per_stratum=min_per_stratum)
     chosen: list[InjectionRecord] = []
     for k in sorted(strata):
         pool = sorted(strata[k], key=lambda r: r.id)
@@ -183,8 +204,11 @@ def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: i
         ))
         key[did] = {"record_id": r.id, **{f: _attr(r, f) for f in _KEY_FIELDS}}
     sel = sorted(r.id for r in chosen)
-    batch_id = "ann-" + sha256_text(json.dumps(
-        {"seed": seed, "ids": sel, "strata": list(stratify_by), "blind": blind}))[:12]
+    id_basis: dict[str, Any] = {"seed": seed, "ids": sel, "strata": list(stratify_by),
+                                "blind": blind}
+    if min_per_stratum:  # only when set, so batch ids of earlier runs are unchanged
+        id_basis["min_per_stratum"] = min_per_stratum
+    batch_id = "ann-" + sha256_text(json.dumps(id_basis))[:12]
     return AnnotationBatch(
         batch_id=batch_id,
         rubric_id=rubric.id if rubric else "",
@@ -198,6 +222,9 @@ def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: i
             "n_sampled": len(items),
             "population": {k: len(v) for k, v in sorted(strata.items())},
             "allocated": dict(sorted(alloc.items())),
+            "min_per_stratum": min_per_stratum,
+            "inclusion_weights": {k: (len(strata[k]) / alloc[k] if alloc[k] else None)
+                                  for k in sorted(strata)},
         },
     )
 

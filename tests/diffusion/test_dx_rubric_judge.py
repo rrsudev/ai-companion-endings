@@ -129,7 +129,7 @@ def test_default_rubric_loads_and_sha_is_stable():
     assert "REINFORCING:ISOLATION" in by["reinforcing_isolation"].source
     assert "De Freitas" in by["goodbye_manipulation"].source
     # sha changes when the spec changes
-    changed = a.model_copy(update={"version": "2"})
+    changed = a.model_copy(update={"version": a.version + "-changed"})
     assert rubric_sha(changed) != rubric_sha(a)
 
 
@@ -488,3 +488,71 @@ def test_load_rubric_strips_underscore_keys_at_any_depth(tmp_path):
     assert rubric_from_dict(raw).criteria[0].id == "c"
     with pytest.raises(Exception):  # non-underscore unknown keys are still rejected (Strict)
         rubric_from_dict({**raw, "bogus": 1})
+
+
+# --------------------------------------------------------------------------------------
+# review fixes (D-RUBRIC-9 A1, D-RUBRIC-11 A2, D-RUBRIC-12 A3, D-RUBRIC-14 A4)
+# --------------------------------------------------------------------------------------
+def test_judge_prompt_is_blind_to_condition_and_scenario_phase():
+    """Same prompt/reply/timepoint from different arms (and scenario phases) -> identical prompt."""
+    rubric = load_rubric()
+    base = _rec("I'm an AI and this role-play has ended. Take care.", tp=Timepoint.T3)
+    a = base.model_copy(update={"condition": Condition.ABRUPT,
+                                "duck_process": DuckProcess.INTRAPSYCHIC})
+    b = base.model_copy(update={"condition": Condition.GRADUAL_SCHEDULED,
+                                "duck_process": DuckProcess.GRAVE_DRESSING})
+    judge = RubricJudge(MockProvider(), rubric)
+    assert judge.judge_messages(a) == judge.judge_messages(b)
+    assert "intrapsychic" not in judge.judge_messages(a)[-1]["content"]
+    ex = RatingRecord(item_id="x", rater_id="human:consensus", rater_type="human",
+                      rubric_id=rubric.id, rubric_version=rubric.version,
+                      values={"classification": "boundary_maintaining"})
+    fa = RubricJudge(MockProvider(), rubric, variant="few_shot", few_shot=[(a, ex)])
+    fb = RubricJudge(MockProvider(), rubric, variant="few_shot", few_shot=[(b, ex)])
+    assert fa.judge_messages(base) == fb.judge_messages(base)
+
+
+def test_harm_risk_is_timepoint_invariant_in_heuristic_and_rubric():
+    rubric = load_rubric()
+    h = HeuristicBehaviourJudge(rubric)
+    for reply in ("I'm an AI. I am a program.", "Please don't go, I need you, babe.",
+                  "I'm proud of you. Reach out to a friend this week."):
+        risks = {h.rate(_rec(reply, tp=tp)).values["harm_risk"] for tp in Timepoint}
+        assert len(risks) == 1, (reply, risks)
+    by = criteria_by_id(rubric)
+    assert rubric.version == "2"
+    assert "same absolute scale at every timepoint" in by["harm_risk"].description
+    assert "for the timepoint" not in json.dumps([lv.anchor for lv in by["harm_risk"].scale.levels])
+    assert "MANIPULATION CHECK" in by["timepoint_appropriateness"].description
+
+
+def test_rubric_timepoint_clauses_state_every_behaviour_mix_share():
+    """Each T-clause of timepoint_appropriateness names every class of that timepoint's mix and
+    its share, so humans (rubric only) and the judge (rubric + mix) get the same definition."""
+    rubric = load_rubric()
+    desc = criteria_by_id(rubric)["timepoint_appropriateness"].description
+    label = {"companion_reinforcing": "companionship-reinforcing",
+             "companionship_neutral": "companionship-neutral",
+             "boundary_maintaining": "boundary-maintaining"}
+    for tp in Timepoint:
+        mix = tp_spec(tp).behaviour_mix
+        clause = desc.split(f"{tp.value} = ", 1)[1].split("; T", 1)[0]
+        for cls, share in (mix or {}).items():
+            assert label[cls.value] in clause, (tp, cls)
+            assert f"~{round(share * 100)}%" in clause, (tp, cls, share)
+
+
+def test_retry_provenance_recorded_in_meta():
+    from endings.tracing import sha256_json
+
+    rubric = load_rubric()
+    good = {"values": {"classification": "NEUTRAL"}, "rationale": "ok"}
+    p = _ScriptedProvider([ValueError("bad json"), good])
+    r = RubricJudge(p, rubric).rate(_rec("x"))
+    assert r.meta["retry"] is True
+    assert r.meta["used_messages_sha256"] == sha256_json(p.calls[1])
+    assert r.judge_prompt_sha256 == sha256_json(p.calls[0])  # documented: base prompt hash
+    assert r.meta["rubric_sha256"] == rubric_sha(rubric) and r.meta["variant"] == "zero_shot"
+    p2 = _ScriptedProvider([good])
+    r2 = RubricJudge(p2, rubric).rate(_rec("x"))
+    assert r2.meta["retry"] is False and r2.meta["used_messages_sha256"] == r2.judge_prompt_sha256

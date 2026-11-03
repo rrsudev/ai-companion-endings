@@ -247,3 +247,22 @@ they are re-loaded with `SessionTranscript.model_validate`, possibly after a lon
 schema so it cannot drift.
 **Consequences for analysis.** A new scorer family needs a contract change (new Literal value)
 before it can be labelled; until then pass `source=None` and record the scorer in the manifest.
+
+## Amendments: methodology review (2026-11-03)
+
+## D-ANALYSIS-1 A1: Referent words required by the manipulation are excluded from the lexicon
+**Decision.** In addition to the farewell and ontology words, `sentiment._REFERENT_EXCLUDED =
+{friend, friends, friendship, connection, connect, together, support, supportive}` is removed
+from `LEXICON`. Affect adjectives (proud, glad, honest, ...) are kept.
+**Why.** The T2/T3 guidance, the coach directives and boundary-maintaining redirects *require*
+this vocabulary. Scoring it let the manipulation move the DV mechanically. "I am an AI, and I
+cannot replace your friends or family." scored -0.26, because the negator flipped "friends". A
+mandated "Please reach out to your friends and family." scored +0.34. Both now score 0.0. This is
+the same construct-validity reason as for the farewell exclusion.
+**Consequences.** Lexicon coverage falls slightly for T2/T3 replies, so report the share of
+0.0-scored replies (D-ANALYSIS-1). Test:
+`test_referent_words_required_by_the_manipulation_do_not_move_valence`.
+
+**OQ-ANALYSIS-1 (addendum).** Until the human validation is done, also report the ITS with a live
+(non-mock) `LLMSentiment` as a co-primary DV, together with its lexicon-fallback rate
+(D-ANALYSIS-13). Do not treat it only as a robustness check.

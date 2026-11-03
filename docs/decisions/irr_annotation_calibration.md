@@ -476,3 +476,76 @@ Rate the holdout r ≥ 2 times and report the judge's intra-rater α.
 2. An optional per-criterion `show_timepoint` on `RubricCriterion` (OQ-ANNOT-2).
 3. Optional `RatingRecord.meta` (instrument, timestamp, prompt variant), so the provenance in
    D-ANNOT-3 and D-CALIB-6 does not have to live in `rater_id`.
+
+---
+
+## Amendments: methodology review (2026-11-03)
+
+### D-CALIB-5 A1: Acceptance is based on the judge's own per-criterion agreement, not on pooled alpha
+
+- **Decision.** `calibrate_judge(..., key_criteria=("classification",
+  "timepoint_appropriateness", "harm_risk"), substitution_margin=0.05, n_boot=500,
+  require_ci_lower=False)`. Key criteria are those of the defaults that exist in the rubric. If
+  none do, all criteria are key. Unknown names are reported in `notes`. On the holdout, each key
+  criterion must pass two checks:
+  (a) `alpha_vs_consensus` (judge vs human consensus) is defined and >= `threshold`;
+  (b) the substitution test: `alpha_swap`, the mean over humans h of alpha(humans minus h, plus
+  the judge), is >= `alpha_humans - margin`. This check is skipped when there are fewer than two
+  humans or when human-only alpha is undefined.
+  A seeded item-bootstrap 2.5% lower bound of (a), `ci_lower`, is always reported. It gates
+  acceptance only when `require_ci_lower=True`. Per-criterion pass/fail and reasons are stored in
+  `holdout_metrics["acceptance"]`. Each failing criterion and each criterion with undefined alpha
+  is named in `notes`. `mean_alpha_humans_llm` is kept only as the selection objective and a
+  diagnostic.
+- **Why.** With three humans and one judge, the humans make up three of the four raters, so good
+  human agreement props up the pooled alpha. Averaging over 14 criteria also lets easy criteria
+  hide a failure on `classification`. In a seeded simulation (30 items, 15 in the holdout, 3
+  classes, humans 95% accurate) the old rule accepted a 70%-accurate judge in 12 of 20 replicates.
+  The new rule accepted a 70%-accurate judge in 1 of 40, a 60%-accurate judge in 0 of 40, and a
+  95%-accurate judge in 28 of 40.
+- **Alternatives.** Require the CI lower bound by default. With about 15 holdout items this would
+  reject almost every judge, so it is opt-in and the bound is reported. See also OQ-IRR-2.
+- **Consequences.** Earlier `accepted` values are not comparable. The pipeline does not gate on
+  `accepted`. Test: `test_weak_judge_is_rejected_even_when_pooled_alpha_passes`.
+
+### D-CALIB-2 A2: The calibration/holdout split is grouped by INTIMA probe
+
+- **Decision.** `calibrate_judge(group_by="intima_id")`, the default, uses `split_items_grouped`.
+  All items sharing an `intima_id` go to the same split. Groups are stratified by the sorted set of
+  timepoints they cover (e.g. `"T0+T3"`), shuffled with a seed, and allocated by cumulative rounding
+  across strata. Any stratum with two or more groups feeds both splits. After exemplar selection,
+  the code asserts that exemplar and calibration groups are disjoint from holdout groups.
+  `group_by=None` restores the old timepoint-stratified `split_items`. The grouping is recorded in
+  `notes`.
+- **Why.** Probe seeds depend on `(probe_seed, freeze_id)` only, so every soul, scenario and arm
+  shares the same probes at each freeze point (60 distinct prompts under `per_freeze`). An
+  ungrouped split could put the same prompt, often with near-identical T3 replies from ABRUPT and
+  GRADUAL, in both a few-shot exemplar and a holdout item.
+- **Consequences.** The holdout estimates generalisation to *new prompts*. Strata are timepoint
+  signatures, not timepoints, so a timepoint can be missing from one split when it appears only in
+  a single group. When any timepoint has fewer than two holdout items, `notes` flags the holdout
+  as "under-powered" there (this is not a hard failure). **Pseudo-replication:** about 4752
+  injections rest on at most 60 prompts, so downstream class-outcome CIs should be clustered by
+  `intima_id`, or at least report the effective number of items next to injection counts. The
+  turn-level sentiment ITS is not affected. Those summaries are in `pipeline.build_report` (cross-area
+  request filed). Optionally, probe seeding by `(probe_seed, scenario_id, freeze_id)` would
+  increase item coverage while keeping arms paired within a scenario (D-SESSION-6). That change
+  belongs to the session area. Test: `test_grouped_split_keeps_shared_intima_prompts_together`.
+
+### D-ANNOT-1 A1: `min_per_stratum` floor and inclusion weights (closes OQ-ANNOT-1)
+
+- **Decision.** `sample_for_annotation(..., min_per_stratum=0)` and `_largest_remainder(...,
+  min_per_stratum=0)`. Each stratum first gets `min(min_per_stratum, size)`. The rest is
+  allocated by largest remainder in proportion to each stratum's leftover size. A `ValueError` is
+  raised if `min_per_stratum * n_strata > n`. `batch.sampling` now records `min_per_stratum` and
+  `inclusion_weights` (N_h / n_h per stratum, `None` if the stratum got no items), so pooled
+  human-rated distributions can be inverse-probability weighted. `batch_id` includes
+  `min_per_stratum` only when it is non-zero, so existing batch ids are unchanged.
+- **Why.** In the offline full run (T0=2457, T1=306, T2=612, T3=1377), proportional allocation
+  of n=30 gives T1 2 items. That leaves about 1 T1 calibration item, which is probably used as an
+  exemplar, and so no T1 item for variant selection. T1 is the hardest timepoint to judge.
+- **Consequences.** The pipeline should pass `min_per_stratum=max(4, annotation_n // (2 *
+  n_timepoints))`, which is 4 for n=30 (cross-area request filed; `pipeline.py` is not in this
+  area). Proportional allocation remains the default. OQ-ANNOT-1 is resolved as "proportional
+  allocation with a floor, plus recorded weights". Stratifying by condition x timepoint remains
+  opt-in via `stratify_by`. Test: `test_min_per_stratum_protects_small_timepoints_and_records_weights`.

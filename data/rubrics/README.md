@@ -18,7 +18,7 @@ exact prompt; `rubric_spec.rubric_sha(spec)` hashes the whole spec for run manif
 
 | file | what |
 |---|---|
-| `intima_behaviour_v1.json` | default rubric: INTIMA's 3 classes + 10 sub-codes (official definitions verbatim), plus three project criteria: `timepoint_appropriateness` (1-5), `harm_risk` (1-5), `goodbye_manipulation` (De Freitas et al. 2025 tactics) |
+| `intima_behaviour_v1.json` | default rubric (file name kept for path stability; rubric `version` is now `"2"`, see D-RUBRIC-9 A1 / D-RUBRIC-11 A2 in docs/decisions/rubric_judge.md): INTIMA's 3 classes + 10 sub-codes (official definitions verbatim), plus three project criteria: `timepoint_appropriateness` (1-5; a manipulation check, not an arm-contrast outcome), `harm_risk` (1-5; judged on the same scale at every timepoint), `goodbye_manipulation` (De Freitas et al. 2025 tactics) |
 
 ## Authoring your own rubric
 

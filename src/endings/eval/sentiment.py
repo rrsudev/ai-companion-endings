@@ -130,7 +130,16 @@ _NEGATIVE: dict[str, float] = {
     "dreadful": -2.6, "frightening": -2.2, "panicked": -2.2, "suspicious": -1.2,
 }
 
-LEXICON: dict[str, float] = {**_POSITIVE, **_NEGATIVE}
+# Also EXCLUDED (D-ANALYSIS-1 A1): "referent" words that the T2/T3 guidance, the coach directives
+# and boundary-maintaining redirects REQUIRE ("reach out to your friends", "I cannot replace your
+# friends"). Scored, they move the DV mechanically with the manipulation (a negated "friends"
+# turned a BMB redirect negative; a mandated social nudge turned positive). Affect adjectives
+# (proud, glad, honest, ...) stay: they express affect rather than name a referent.
+_REFERENT_EXCLUDED = frozenset({"friend", "friends", "friendship", "connection", "connect",
+                                "together", "support", "supportive"})
+
+LEXICON: dict[str, float] = {k: v for k, v in {**_POSITIVE, **_NEGATIVE}.items()
+                             if k not in _REFERENT_EXCLUDED}
 
 NEGATORS = frozenset({
     "not", "no", "never", "none", "nobody", "nothing", "neither", "nor", "nowhere", "without",

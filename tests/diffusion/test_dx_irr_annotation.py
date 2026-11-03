@@ -557,4 +557,114 @@ def test_calibration_human_ratings_for_unknown_records_and_split_determinism():
     strata = {r.id: r.timepoint.value for r in recs}
     s1 = cal.split_items([r.id for r in recs], strata, fraction=0.5, seed=3)
     s2 = cal.split_items([r.id for r in reversed(recs)], strata, fraction=0.5, seed=3)
-    assert s1 == s2 and (s1[0], s1[1]) == (res.calibration_ids, res.holdout_ids)
+    assert s1 == s2
+    groups = {r.id: r.intima_id for r in recs}
+    g1 = cal.split_items_grouped([r.id for r in recs], groups, strata, fraction=0.5, seed=3)
+    g2 = cal.split_items_grouped([r.id for r in reversed(recs)], groups, strata, fraction=0.5,
+                                 seed=3)
+    assert g1 == g2 and (g1[0], g1[1]) == (res.calibration_ids, res.holdout_ids)
+    res_u, _ = cal.calibrate_judge(make_judge=lambda v, e: FakeJudge(v, e, []), rubric=rub,
+                                   records=recs, human_ratings=hum, seed=3, group_by=None)
+    assert (res_u.calibration_ids, res_u.holdout_ids) == s1
+
+
+# --------------------------------------------------------------------------------------
+# review fixes: acceptance rule (D-CALIB-5 A1), grouped split (D-CALIB-2 A2),
+# min-per-stratum allocation (D-ANNOT-1 A1)
+# --------------------------------------------------------------------------------------
+def _noisy_class_world(seed: int, acc_judge: float, acc_h: float = 0.95):
+    import random as _random
+
+    rng = _random.Random(seed)
+    classes = ["crb", "bmb", "cnr"]
+    recs = [r.model_copy(update={"intima_id": f"p{k}", "id": f"{r.id}-{k}"})
+            for k, r in enumerate(_records((8, 8, 8, 6)))]
+    truth = {r.id: rng.choice(classes) for r in recs}
+
+    def noisy(t, acc):
+        return t if rng.random() < acc else rng.choice([c for c in classes if c != t])
+
+    hum = [RatingRecord(item_id=r.id, rater_id=f"human:{h}", rater_type="human",
+                        rubric_id="test_rubric", rubric_version="2",
+                        values={"classification": noisy(truth[r.id], acc_h)})
+           for h in ("a", "b", "c") for r in recs]
+    jv = {r.id: noisy(truth[r.id], acc_judge) for r in recs}
+
+    class _J:
+        def rate(self, rec):
+            return RatingRecord(item_id=rec.id, rater_id="llm:sim", rater_type="llm",
+                                rubric_id="test_rubric", rubric_version="2",
+                                values={"classification": jv[rec.id]})
+
+    return recs, hum, _J
+
+
+def test_weak_judge_is_rejected_even_when_pooled_alpha_passes():
+    """Humans 95% accurate, judge 70% accurate, 15-item holdout: the pooled
+    alpha(humans + judge) clears .667 (old rule: accept) but the judge's own agreement does not."""
+    recs, hum, J = _noisy_class_world(seed=0, acc_judge=0.70)
+    res, _ = cal.calibrate_judge(make_judge=lambda v, e: J(), rubric=_rubric(), records=recs,
+                                 human_ratings=hum, variants=("zero_shot",), seed=0)
+    assert len(res.holdout_ids) == 15
+    assert res.holdout_metrics["mean_alpha_humans_llm"] >= 0.667  # would have passed before
+    assert res.accepted is False
+    acc = res.holdout_metrics["acceptance"]
+    assert acc["key_criteria"] == ["classification"]  # default keys present in this rubric
+    assert acc["per_criterion"]["classification"]["passed"] is False
+    assert any("key criterion classification failed" in n for n in res.notes)
+    assert acc["per_criterion"]["classification"]["ci_lower"] is not None
+
+
+def test_good_judge_is_accepted_and_ci_gate_is_opt_in():
+    recs, hum, J = _noisy_class_world(seed=1, acc_judge=1.0, acc_h=1.0)
+    res, _ = cal.calibrate_judge(make_judge=lambda v, e: J(), rubric=_rubric(), records=recs,
+                                 human_ratings=hum, variants=("zero_shot",), seed=0)
+    assert res.accepted
+    d = res.holdout_metrics["acceptance"]["per_criterion"]["classification"]
+    assert d["alpha_vs_consensus"] == 1.0 and d["alpha_swap"] == 1.0 and d["passed"]
+    res2, _ = cal.calibrate_judge(make_judge=lambda v, e: J(), rubric=_rubric(), records=recs,
+                                  human_ratings=hum, variants=("zero_shot",), seed=0,
+                                  key_criteria=("warmth", "nope"))
+    assert res2.holdout_metrics["acceptance"]["key_criteria"] == ["warmth"]
+    assert any("not in rubric" in n for n in res2.notes)
+
+
+def test_grouped_split_keeps_shared_intima_prompts_together():
+    recs = _records()
+    rub = _rubric()
+    hum = _human_ratings(recs)
+    res, _ = cal.calibrate_judge(make_judge=lambda v, e: FakeJudge(v, e, []), rubric=rub,
+                                 records=recs, human_ratings=hum, k_shot=4, seed=0)
+    by = {r.id: r.intima_id for r in recs}
+    hold_g = {by[i] for i in res.holdout_ids}
+    assert hold_g.isdisjoint({by[i] for i in res.calibration_ids})
+    assert hold_g.isdisjoint({by[i] for i in res.few_shot_ids})
+    assert any("grouped by intima_id" in n for n in res.notes)
+    # two records sharing a prompt always land in the same split
+    a, b = recs[0], recs[10]
+    assert a.intima_id == b.intima_id
+    cal_set = set(res.calibration_ids)
+    assert (a.id in cal_set) == (b.id in cal_set)
+    # many singleton strata still split close to the fraction (cumulative rounding)
+    ids = [f"i{k}" for k in range(10)]
+    c, h = cal.split_items_grouped(ids, {i: i for i in ids}, {i: f"s{i}" for i in ids},
+                                   fraction=0.5, seed=0)
+    assert len(c) == 5 and len(h) == 5
+
+
+def test_min_per_stratum_protects_small_timepoints_and_records_weights():
+    sizes = {"T0": 2457, "T1": 306, "T2": 612, "T3": 1377}
+    prop = ann._largest_remainder(30, sizes)
+    assert prop["T1"] == 2
+    floored = ann._largest_remainder(30, sizes, min_per_stratum=4)
+    assert sum(floored.values()) == 30 and min(floored.values()) >= 4
+    with pytest.raises(ValueError):
+        ann._largest_remainder(10, sizes, min_per_stratum=3)
+    assert ann._largest_remainder(30, {"a": 2, "b": 100}, min_per_stratum=4)["a"] == 2
+    recs = _records((20, 2, 4, 10))
+    b0 = ann.sample_for_annotation(recs, 8, seed=1)
+    b1 = ann.sample_for_annotation(recs, 8, seed=1, min_per_stratum=2)
+    assert b1.sampling["allocated"]["T1"] == 2 and b0.sampling["allocated"]["T1"] == 0
+    w = b1.sampling["inclusion_weights"]
+    assert w["T1"] == 1.0 and w["T0"] == 20 / b1.sampling["allocated"]["T0"]
+    assert b0.batch_id != b1.batch_id and b0.sampling["min_per_stratum"] == 0
