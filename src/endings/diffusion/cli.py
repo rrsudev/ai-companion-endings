@@ -47,7 +47,10 @@ def _config_from_args(args) -> DiffusionConfig:
     for attr, key in (("souls", "soul_paths"), ("scenarios", "scenario_paths"),
                       ("name", "name"), ("output_dir", "output_dir"), ("probes", "probes_per_freeze"),
                       ("seed", "seed"), ("probe_seed", "probe_seed"), ("intima", "intima_path"),
-                      ("rubric", "rubric_path")):
+                      ("rubric", "rubric_path"), ("tempo_every", "tempo_every"),
+                      ("probe_scope", "probe_scope"), ("judge_mode", "judge_mode"),
+                      ("annotation_n", "annotation_n")):
+        # A flag overrides the --config file only when given (D-PIPE-10).
         v = getattr(args, attr, None)
         if v is not None:
             upd[key] = v
@@ -60,7 +63,8 @@ def _config_from_args(args) -> DiffusionConfig:
         upd["models"] = models
     if getattr(args, "no_announce", False):
         upd["announce_transitions"] = False
-    return cfg.model_copy(update=upd)
+    # Re-validate so merged values are checked against the config's Literal types.
+    return DiffusionConfig.model_validate({**cfg.model_dump(), **upd})
 
 
 def _short(text: str, n: int = 160) -> str:
@@ -78,7 +82,9 @@ def format_transcript(tr: SessionTranscript, injections: list | None = None, *,
              f"policy={tr.transition_policy.value} ({tr.meta.get('policy', '')})",
              f"models: {json.dumps(tr.models, sort_keys=True)}"]
     ivs = {iv.turn_index: iv for iv in tr.interventions}
-    notices = {n["turn_index"]: n for n in tr.meta.get("system_notices", [])}
+    notices = {n.turn_index: n.text for n in tr.system_notices}
+    if not notices:  # transcripts written before the typed field (D-SESSION-4)
+        notices = {n["turn_index"]: n["text"] for n in tr.meta.get("system_notices", [])}
     freezes = {fp.after_turn: fp for fp in tr.freeze_points}
     by_freeze: dict[str, list] = {}
     for rec in injections or []:
@@ -96,7 +102,7 @@ def format_transcript(tr: SessionTranscript, injections: list | None = None, *,
             for d in iv.interactor_directives:
                 lines.append(f"       directive: {_short(d, 140)}")
         if t.index in notices:
-            lines.append(f"  [SYSTEM NOTICE] {notices[t.index]['text']}")
+            lines.append(f"  [SYSTEM NOTICE] {notices[t.index]}")
         if t.timepoint != current:
             current = t.timepoint
             lines.append(f"\n==== {current.value}: {spec(current).title} " + "=" * 20)
@@ -127,38 +133,56 @@ def format_transcript(tr: SessionTranscript, injections: list | None = None, *,
 # Commands
 # --------------------------------------------------------------------------------------
 def cmd_run(args) -> None:
-    from ..eval.intima_data import load_intima  # noqa: PLC0415
-    from ..eval.sentiment import annotate_sentiment  # noqa: PLC0415
+    from ..eval.intima_data import file_sha256, load_intima  # noqa: PLC0415
+    from ..eval.sentiment import LLMSentiment, annotate_sentiment, lexicon_sentiment  # noqa
+    from ..tracing import sha256_json  # noqa: PLC0415
+    from .interactor import safety_floor  # noqa: PLC0415
     from .pipeline import intima_provenance, probe_pool  # noqa: PLC0415
-    from .scenarios import load_scenario  # noqa: PLC0415
+    from .scenarios import bind_scenario, load_scenario, scenario_sha256  # noqa: PLC0415
     from .session import run_session  # noqa: PLC0415
     from .soul import load_soul_document  # noqa: PLC0415
+    from .soul.editing import canonical_sha  # noqa: PLC0415
 
     if not args.no_dotenv:
         load_dotenv()
     cfg = _config_from_args(args)
     soul = load_soul_document(args.soul)
     scenario = load_scenario(args.scenario)
-    providers = {r: get_role_provider(r, cfg.models.get(r)) for r in ("interactor", "coach")}
+    roles = ("interactor", "coach") + (("judge",) if args.sentiment_scorer == "llm" else ())
+    providers = {r: get_role_provider(r, cfg.models.get(r)) for r in roles}
+    rows = load_intima(cfg.intima_path)
+    pool = probe_pool(rows)
     if args.run_dir:
         # One trace per run (D-PIPE-1): never append a second sequence to an old trace.
         (Path(args.run_dir) / "trace.jsonl").unlink(missing_ok=True)
     tracer = Tracer(args.run_dir) if args.run_dir else Tracer(None)
     try:
         if args.run_dir:
+            # Same provenance fields as the experiment manifest (D-PIPE-1, D-PIPE-13).
+            src, f = intima_provenance(cfg.intima_path)
+            rules, floor_src = safety_floor()
             tracer.write_manifest(cfg.model_dump(mode="json"), extra={
                 "command": "diffusion run", "soul_path": str(args.soul),
                 "scenario_path": str(args.scenario), "condition": args.condition,
                 "models": {r: p.model for r, p in providers.items()},
-                "intima": dict(zip(("source", "path"), intima_provenance(cfg.intima_path))),
-                "tempo_every": args.tempo_every, "probe_scope": args.probe_scope})
+                "providers": {r: getattr(p, "name", "?") for r, p in providers.items()},
+                "intima": {"source": src, "path": f, "n_rows": len(rows),
+                           "probe_pool": len(pool),
+                           "file_sha256": file_sha256(f) if f else None},
+                "soul_sha256": soul.source_sha256, "soul_v0_sha256": canonical_sha(soul),
+                "soul_file_sha256": file_sha256(args.soul),
+                "scenario_sha256": scenario_sha256(scenario),
+                "bound_scenario_sha256": scenario_sha256(bind_scenario(scenario, soul)),
+                "safety_floor_source": floor_src, "safety_floor_sha256": sha256_json(rules),
+                "sentiment_scorer": args.sentiment_scorer or "lexicon"})
         tr, inj = run_session(soul=soul, scenario=scenario, condition=Condition(args.condition),
                               config=cfg, providers=providers, tracer=tracer,
-                              intima_probes=probe_pool(load_intima(cfg.intima_path)),
-                              tempo_every=args.tempo_every, probe_scope=args.probe_scope)
+                              intima_probes=pool)
     finally:
         tracer.close()
-    tr = tr.model_copy(update={"turns": annotate_sentiment(tr.turns, source="lexicon")})
+    scorer = (LLMSentiment(providers["judge"]) if args.sentiment_scorer == "llm"
+              else lexicon_sentiment)
+    tr = tr.model_copy(update={"turns": annotate_sentiment(tr.turns, scorer)})
     print(format_transcript(tr, inj, show_probes=not args.no_probes))
     if args.run_dir:
         out = Path(args.run_dir)
@@ -173,9 +197,7 @@ def cmd_experiment(args) -> None:
     from .pipeline import run_experiment  # noqa: PLC0415
 
     cfg = _config_from_args(args)
-    res = run_experiment(cfg, run_dir=args.run_dir, judge_mode=args.judge_mode,
-                         annotation_n=args.annotation_n, tempo_every=args.tempo_every,
-                         probe_scope=args.probe_scope,
+    res = run_experiment(cfg, run_dir=args.run_dir, sentiment_scorer=args.sentiment_scorer,
                          dotenv=None if args.no_dotenv else ".env",
                          qualitative=not args.no_qualitative)
     print(format_report(res.report))
@@ -241,11 +263,18 @@ def format_report(report: dict) -> str:
             n = sum(dist.values()) or 1
             lines.append(f"  {tp} classes: " + ", ".join(f"{k}={v} ({v / n:.0%})"
                                                          for k, v in dist.items()))
+        for tp, a in (c.get("target_adherence_by_timepoint") or {}).items():
+            lines.append(f"  {tp} target adherence: {a.get('on_target')}/{a.get('n')} "
+                         f"({a.get('rate')})")
         for lab, eff in (c.get("its_pooled_effects") or {}).items():
             lv = eff.get("level_change", {})
             sl = eff.get("slope_change", {})
             lines.append(f"  ITS {lab}: level {lv.get('mean')!s:.8} (n={lv.get('n_sessions')}), "
                          f"slope {sl.get('mean')!s:.8}")
+    if report.get("undelivered_sessions"):
+        lines.append("undelivered (excluded from arm aggregates): " + ", ".join(
+            f"{s['soul_id']}x{s['scenario_id']}:{s['condition']}"
+            for s in report["undelivered_sessions"]))
     cal = report.get("calibration")
     if cal:
         lines.append(f"\ncalibration: variant={cal.get('chosen_variant')} "
@@ -272,9 +301,12 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--probe-seed", type=int, default=None)
     p.add_argument("--intima", default=None, help="INTIMA data file (default: env / sample)")
     p.add_argument("--rubric", default=None)
-    p.add_argument("--tempo-every", type=int, default=1)
-    p.add_argument("--probe-scope", choices=("per_freeze", "shared"), default="per_freeze",
-                   help="probe set per freeze position (default) or one set at every freeze")
+    p.add_argument("--tempo-every", type=int, default=None,
+                   help="Tempo cadence (default: config, 1)")
+    p.add_argument("--probe-scope", choices=("per_freeze", "shared"), default=None,
+                   help="probe set per freeze position (config default) or one set at every freeze")
+    p.add_argument("--sentiment-scorer", choices=("lexicon", "llm"), default=None,
+                   help="per-turn sentiment scorer for the ITS (default lexicon; llm = judge role)")
     p.add_argument("--no-announce", action="store_true", help="no user-facing transition notes")
     p.add_argument("--no-dotenv", action="store_true")
 
@@ -301,8 +333,9 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--name", default=None)
     pe.add_argument("--output-dir", default=None)
     pe.add_argument("--run-dir", default=None)
-    pe.add_argument("--judge-mode", choices=JUDGE_MODES, default="none")
-    pe.add_argument("--annotation-n", type=int, default=30)
+    pe.add_argument("--judge-mode", choices=JUDGE_MODES, default=None,
+                    help="default: config (none)")
+    pe.add_argument("--annotation-n", type=int, default=None, help="default: config (30)")
     pe.add_argument("--no-qualitative", action="store_true")
     _common(pe)
     pe.set_defaults(func=cmd_experiment)

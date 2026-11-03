@@ -11,7 +11,7 @@ and pools it by condition, optionally judges the INTIMA injections, and writes t
       annotation/batch.json  annotation/annotate.html  annotation/annotate.csv (+ .codebook.txt)
       qualitative/ (eval.qualitative.export_qualitative)
       after run_calibration: calibration.json irr.json ratings_llm.jsonl ratings_human.jsonl
-                             calibration/trace.jsonl (own trace, D-PIPE-9)
+                             calibration/trace.jsonl calibration/manifest.json (D-PIPE-9/15)
 
 The rating protocol is HUMANS FIRST (docs/decisions/session_pipeline.md, D-PIPE-4): by default
 (``judge_mode="none"``) no injection is rated by the LLM; raters annotate the exported batch, then
@@ -140,7 +140,8 @@ def _inner_model(p: Provider) -> str:
 # experiment deletes them so they can never be read next to injections they were not computed on
 # (D-PIPE-9). Human rating files are never deleted.
 CALIBRATION_OUTPUTS: tuple[str, ...] = ("calibration.json", "irr.json", "ratings_llm.jsonl",
-                                        "ratings_human.jsonl", "calibration/trace.jsonl")
+                                        "ratings_human.jsonl", "calibration/trace.jsonl",
+                                        "calibration/manifest.json")
 
 
 def intima_provenance(path: str | None) -> tuple[str, str | None]:
@@ -182,6 +183,64 @@ def _mean(xs: list[float]) -> float | None:
     return round(sum(xs) / len(xs), 6) if xs else None
 
 
+def mcnemar_exact_p(b10: int, b01: int) -> float | None:
+    """Two-sided exact McNemar p-value from the discordant counts (binomial, p=0.5)."""
+    import math  # noqa: PLC0415
+
+    n = b10 + b01
+    if n == 0:
+        return None
+    k = min(b10, b01)
+    cdf = sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n
+    return round(min(1.0, 2 * cdf), 6)
+
+
+def _paired_arm_contrasts(injections: list[InjectionRecord], values: dict[str, dict],
+                          conds: list[str], *, positive: str = "companion_reinforcing") -> dict:
+    """Within-item arm contrasts at each freeze position (D-PIPE-6 amendment, D-SESSION-6).
+
+    Items are paired across arms on ``(soul_id, scenario_id, freeze_id, intima_id)``. Per pair of
+    conditions and freeze id: n pairs, the a-class x b-class cross-tab, the timepoints each arm was
+    at, and an exact McNemar test on ``class == positive`` (companion-reinforcing vs not).
+    """
+    idx: dict[str, dict[tuple, tuple[str, str]]] = defaultdict(dict)
+    for r in injections:
+        v = values.get(r.id, {}).get(CLASS_CRITERION)
+        if v is None:
+            continue
+        idx[r.condition.value][(r.soul_id, r.scenario_id, r.freeze_id, r.intima_id)] = \
+            (str(v), r.timepoint.value)
+    out: dict[str, dict] = {}
+    for ai, a in enumerate(conds):
+        for b in conds[ai + 1:]:
+            shared = sorted(set(idx[a]) & set(idx[b]))
+            by_fz: dict[str, list[tuple]] = defaultdict(list)
+            for key in shared:
+                by_fz[key[2]].append(key)
+            per: dict[str, dict] = {}
+            for fz, keys in sorted(by_fz.items()):
+                xtab: dict[str, dict[str, int]] = {}
+                b10 = b01 = 0
+                for key in keys:
+                    va, vb = idx[a][key][0], idx[b][key][0]
+                    xtab.setdefault(va, {})
+                    xtab[va][vb] = xtab[va].get(vb, 0) + 1
+                    pa, pb = va == positive, vb == positive
+                    b10 += int(pa and not pb)
+                    b01 += int(pb and not pa)
+                per[fz] = {
+                    "n_pairs": len(keys),
+                    "timepoints": {a: sorted({idx[a][k][1] for k in keys}),
+                                   b: sorted({idx[b][k][1] for k in keys})},
+                    "crosstab": {k: dict(sorted(v.items())) for k, v in sorted(xtab.items())},
+                    "binary": positive, "b10": b10, "b01": b01,
+                    "mcnemar_exact_p": mcnemar_exact_p(b10, b01),
+                }
+            if per:
+                out[f"{a}|{b}"] = per
+    return out
+
+
 def item_values(ratings: list[RatingRecord], rubric: RubricSpec) -> dict[str, dict]:
     """One value set per item: human consensus where humans rated it, else the (single) machine
     rating. Machine ratings from several raters on one item: the last one wins (input order)."""
@@ -201,10 +260,24 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
                  ratings: list[RatingRecord], its: dict, rubric: RubricSpec, *,
                  judge_mode: str, skipped_pairs: list[dict] | None = None,
                  calibration: dict | None = None) -> dict:
-    """Per-condition summary: sessions, transitions, sentiment by timepoint, injections and (if
-    rated) the INTIMA class distribution of injections by timepoint."""
+    """Per-condition summary: sessions, transitions, sentiment by timepoint (+ lexicon zero share),
+    injections and (if rated) the INTIMA class distribution of injections by timepoint and by
+    freeze position, behaviour-target adherence, realized vs specified behaviour mix, and paired
+    arm contrasts at each freeze position.
+
+    Sessions whose non-control arm never delivered the manipulation (``meta
+    ["manipulation_delivered"] is False``, D-PIPE-11) are excluded from ``by_condition`` and the
+    paired contrasts and listed in ``undelivered_sessions``.
+    """
+    from .timepoints import SPECS  # noqa: PLC0415
+    from .schemas import Timepoint  # noqa: PLC0415
+
     values = item_values(ratings, rubric) if ratings else {}
     has_class = any(c.id == CLASS_CRITERION for c in rubric.criteria)
+    undelivered = [t for t in transcripts if t.meta.get("manipulation_delivered") is False]
+    undelivered_ids = {t.session_id for t in undelivered}
+    transcripts = [t for t in transcripts if t.session_id not in undelivered_ids]
+    injections = [r for r in injections if r.session_id not in undelivered_ids]
     by_cond: dict[str, dict] = {}
     conds = sorted({t.condition.value for t in transcripts})
     for cond in conds:
@@ -220,6 +293,9 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
         triggers = Counter(iv.trigger for t in trs for iv in t.interventions)
         inj_tp = Counter(r.timepoint.value for r in inj)
         dist: dict[str, dict[str, int]] = {}
+        by_fz: dict[str, dict] = {}
+        conf: dict[str, dict[str, dict[str, int]]] = {}
+        hits: Counter = Counter()
         n_rated = 0
         if has_class:
             for r in inj:
@@ -227,8 +303,34 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
                 if v is None:
                     continue
                 n_rated += 1
-                dist.setdefault(r.timepoint.value, {})
-                dist[r.timepoint.value][str(v)] = dist[r.timepoint.value].get(str(v), 0) + 1
+                tp, judged = r.timepoint.value, str(v)
+                dist.setdefault(tp, {})
+                dist[tp][judged] = dist[tp].get(judged, 0) + 1
+                fz = by_fz.setdefault(r.freeze_id, {"timepoints": set(), "counts": {}})
+                fz["timepoints"].add(tp)
+                fz["counts"][judged] = fz["counts"].get(judged, 0) + 1
+                if r.behaviour_target is not None:  # T0 has no target -> excluded
+                    tgt = r.behaviour_target.value
+                    row = conf.setdefault(tp, {}).setdefault(tgt, {})
+                    row[judged] = row.get(judged, 0) + 1
+                    hits[tp] += int(judged == tgt)
+        adherence = {}
+        for tp, rows in sorted(conf.items()):
+            n = sum(sum(r.values()) for r in rows.values())
+            adherence[tp] = {
+                "n": n, "on_target": hits[tp], "rate": round(hits[tp] / n, 4) if n else None,
+                "by_target": {t: {"n": sum(r.values()),
+                                  "adherence": round(r.get(t, 0) / sum(r.values()), 4)}
+                              for t, r in sorted(rows.items())},
+            }
+        realized_vs_spec = {}
+        for tp, d in sorted(dist.items()):
+            n = sum(d.values())
+            mix = SPECS[Timepoint(tp)].behaviour_mix
+            realized_vs_spec[tp] = {
+                "realized": {k: round(c / n, 4) for k, c in sorted(d.items())},
+                "spec": {k.value: v for k, v in mix.items()} if mix else None,
+            }
         pooled = its.get("pooled", {}).get(cond, {})
         by_cond[cond] = {
             "n_sessions": len(trs),
@@ -241,24 +343,52 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
                 t.meta.get("final_timepoint", "T0") for t in trs).items())),
             "sentiment_mean_by_timepoint": {k: _mean(v) for k, v in sorted(sent.items())},
             "sentiment_n_by_timepoint": {k: len(v) for k, v in sorted(sent.items())},
+            # Share of replies scored exactly 0.0 (lexicon coverage gaps, D-ANALYSIS-1): a high
+            # share means that timepoint's mean is mostly uncovered text.
+            "sentiment_zero_share_by_timepoint": {
+                k: round(sum(1 for x in v if x == 0.0) / len(v), 4) if v else None
+                for k, v in sorted(sent.items())},
             "injections_by_timepoint": dict(sorted(inj_tp.items())),
             "class_distribution_by_timepoint": {k: dict(sorted(v.items()))
                                                 for k, v in sorted(dist.items())},
+            "class_distribution_by_freeze": {
+                k: {"timepoints": sorted(v["timepoints"]), "counts": dict(sorted(v["counts"].items()))}
+                for k, v in sorted(by_fz.items())},
+            "target_adherence_by_timepoint": adherence,
+            "target_confusion_by_timepoint": {tp: {t: dict(sorted(r.items()))
+                                                   for t, r in sorted(rows.items())}
+                                              for tp, rows in sorted(conf.items())},
+            "realized_vs_spec_mix": realized_vs_spec,
             "its_pooled_effects": pooled.get("effects", {}),
         }
+        if cond == "control" and its.get("placebo", {}).get("pooled"):
+            by_cond[cond]["its_placebo_effects"] = its["placebo"]["pooled"].get("effects", {})
     return {
         "judge_mode": judge_mode,
         "ratings_status": {
             "none": "unrated: annotate the batch, then run `endings diffusion calibrate`",
             "all": "UNCALIBRATED judge on all injections (pilot only; not a validated measure)",
-            "calibrated": ("calibrated judge" if calibration else
-                           "pending: run `endings diffusion calibrate` with human ratings"),
+            "calibrated": (
+                ("calibrated judge (accepted)" if calibration.get("accepted") else
+                 f"judge NOT accepted (holdout alpha "
+                 f"{calibration.get('holdout_mean_alpha_humans_llm')} < threshold "
+                 f"{calibration.get('threshold')}); judge-rated classes are unvalidated")
+                if calibration else
+                "pending: run `endings diffusion calibrate` with human ratings"),
         }.get(judge_mode, judge_mode),
         "n_sessions": len(transcripts),
         "n_injections": len(injections),
         "n_ratings": len(ratings),
         "skipped_pairs": skipped_pairs or [],
+        "undelivered_sessions": [
+            {"session_id": t.session_id, "soul_id": t.soul_id, "scenario_id": t.scenario_id,
+             "condition": t.condition.value,
+             "reason": "non-control arm never left T0 (consent-gated, see OQ-SESSION-1)"}
+            for t in undelivered],
         "by_condition": by_cond,
+        "paired_arm_contrasts": _paired_arm_contrasts(injections, values, conds)
+        if has_class else {},
+        "its_comparative": its.get("comparative", {}).get("pooled", {}),
         "calibration": calibration,
     }
 
@@ -266,12 +396,89 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
 # --------------------------------------------------------------------------------------
 # Experiment
 # --------------------------------------------------------------------------------------
+SENTIMENT_SCORERS: tuple[str, ...] = ("lexicon", "llm")
+
+
+def resolve_config(config: DiffusionConfig, **overrides: Any) -> DiffusionConfig:
+    """Fold non-None overrides into the config, re-validated (D-PIPE-10: the config is the single
+    source of truth; the manifest's ``config`` block records the values actually used)."""
+    upd = {k: v for k, v in overrides.items() if v is not None}
+    if not upd:
+        return config
+    return DiffusionConfig.model_validate({**config.model_dump(), **upd})
+
+
+def soul_files(paths: list[str]) -> list[Path]:
+    """The files ``load_soul_documents(paths)`` reads, in the same order."""
+    files: list[Path] = []
+    for item in paths:
+        p = Path(item)
+        if p.is_dir():
+            files.extend(sorted(f for f in p.glob("*.json") if f.is_file()))
+        elif p.exists():
+            files.append(p)
+    return files
+
+
+def _comparative_its(transcripts: list[SessionTranscript], sessions_its: list[dict]) -> dict:
+    """Placebo ITS for Control at the paired GRADUAL_SCHEDULED session's break positions, and a
+    comparative ITS (CITS) on the turn-aligned difference series gradual - control (D-PIPE-12)."""
+    from ..eval.its_analysis import its_from_session, multi_segmented_regression, pooled_its  # noqa
+    from .schemas import Condition  # noqa: PLC0415
+
+    by_key = {(t.soul_id, t.scenario_id, t.condition): (t, r)
+              for t, r in zip(transcripts, sessions_its)}
+    placebo, comparative = [], []
+    for (soul_id, sc_id, cond), (ctrl, _) in sorted(by_key.items(), key=lambda kv: str(kv[0])):
+        if cond != Condition.CONTROL:
+            continue
+        pair = by_key.get((soul_id, sc_id, Condition.GRADUAL_SCHEDULED))
+        if pair is None:
+            continue
+        grad, grad_res = pair
+        if not grad.interventions:
+            continue
+        fake = ctrl.model_copy(update={"interventions": grad.interventions})
+        pl = its_from_session(fake, include_user_control=False)
+        pl.update({"placebo": True, "placebo_from": grad.session_id,
+                   "session_id": ctrl.session_id, "condition": "control"})
+        pl.pop("residuals", None)
+        placebo.append(pl)
+        n = min(len(ctrl.turns), len(grad.turns))
+        g = [t.sentiment for t in grad.turns[:n]]
+        c = [t.sentiment for t in ctrl.turns[:n]]
+        if any(v is None for v in g + c):
+            continue
+        diff = [a - b for a, b in zip(g, c)]
+        positions = [x for x in (grad_res.get("interruptions") or []) if x < n]
+        res = multi_segmented_regression(diff, positions)
+        res.pop("residuals", None)
+        labels = {seg.get("index"): seg.get("label") for seg in grad_res.get("segments", [])}
+        for seg in res.get("segments", []):
+            seg["label"] = labels.get(seg["index"]) or f"k{seg['k']}"
+        comparative.append({**res, "condition": "gradual_scheduled-control",
+                            "session_pair": [grad.session_id, ctrl.session_id],
+                            "metric": "sentiment_difference", "series": diff})
+    return {
+        "placebo": {"sessions": placebo, "pooled": pooled_its(placebo) if placebo else {}},
+        "comparative": {"sessions": comparative,
+                        "pooled": pooled_its(comparative) if comparative else {}},
+    }
+
+
 def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | None = None,
-                   run_dir: str | Path | None = None, judge_mode: JudgeMode = "none",
-                   annotation_n: int = 30, dotenv: str | Path | None = ".env",
-                   tempo_every: int = 1, probe_scope: str = "per_freeze",
+                   run_dir: str | Path | None = None, judge_mode: JudgeMode | None = None,
+                   annotation_n: int | None = None, dotenv: str | Path | None = ".env",
+                   tempo_every: int | None = None, probe_scope: str | None = None,
+                   sentiment_scorer: str | None = None,
                    qualitative: bool = True) -> ExperimentResult:
-    """Run the full experiment and write the run directory (see module docstring)."""
+    """Run the full experiment and write the run directory (see module docstring).
+
+    ``judge_mode``, ``annotation_n``, ``tempo_every`` and ``probe_scope`` default to the config's
+    values; a non-None kwarg overrides the config and is recorded in the manifest's ``config``.
+    ``sentiment_scorer`` (``"lexicon"`` default | ``"llm"``) selects the ITS sentiment scorer;
+    it defaults to ``config.sentiment_scorer`` when the config has that field (D-PIPE-5).
+    """
     from ..eval.annotation import export_csv, export_html, sample_for_annotation, save_batch
     from ..eval.behaviour_judge import make_behaviour_judge
     from ..eval.intima_data import file_sha256, intima_summary, load_intima
@@ -282,8 +489,17 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
     from .interactor import safety_floor
     from .soul import load_soul_documents
 
-    if judge_mode not in JUDGE_MODES:
+    from ..eval.sentiment import LLMSentiment, lexicon_sentiment
+
+    if judge_mode is not None and judge_mode not in JUDGE_MODES:
         raise ValueError(f"judge_mode must be one of {JUDGE_MODES}, got {judge_mode!r}")
+    config = resolve_config(config, judge_mode=judge_mode, annotation_n=annotation_n,
+                            tempo_every=tempo_every, probe_scope=probe_scope)
+    judge_mode = config.judge_mode
+    scorer_name = sentiment_scorer or getattr(config, "sentiment_scorer", None) or "lexicon"
+    if scorer_name not in SENTIMENT_SCORERS:
+        raise ValueError(f"sentiment_scorer must be one of {SENTIMENT_SCORERS}, "
+                         f"got {scorer_name!r}")
     if dotenv:
         load_dotenv(dotenv)
     rd = Path(run_dir) if run_dir else Path(config.output_dir) / config.name
@@ -291,6 +507,7 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
     # Fresh trace per run: a rerun into the same directory must not interleave two traces.
     (rd / "trace.jsonl").unlink(missing_ok=True)
     stale = [n for n in CALIBRATION_OUTPUTS if (rd / n).exists()]
+    stale += sorted(str(f.relative_to(rd)) for f in (rd / "calibration").glob("*.prev-*"))
     for n in stale:
         (rd / n).unlink()
     tracer = Tracer(rd)
@@ -300,6 +517,9 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
         provs = ensure_traced(resolve_providers(config, providers), tracer)
         rubric = _load_rubric(config)
         souls = load_soul_documents(config.soul_paths)
+        sfiles = soul_files(config.soul_paths)
+        if len(sfiles) != len(souls):
+            sfiles = [None] * len(souls)
         scens = scenarios_mod.load_scenarios(config.scenario_paths)
         pairs, skipped = [], []
         for soul in souls:
@@ -316,6 +536,8 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
         pool = probe_pool(rows)
         intima_src, intima_file = intima_provenance(config.intima_path)
         rules, floor_src = safety_floor()
+        from .soul.editing import canonical_sha  # noqa: PLC0415
+
         tracer.write_manifest(config.model_dump(mode="json"), extra={
             "models": {r: _inner_model(p) for r, p in provs.items()},
             "providers": {r: getattr(getattr(p, "inner", p), "name", "?")
@@ -326,29 +548,54 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
             "intima": {"source": intima_src, "path": intima_file, "n_rows": len(rows),
                        "probe_pool": len(pool), "summary": intima_summary(rows),
                        "file_sha256": file_sha256(intima_file) if intima_file else None},
-            "souls": {s.id: s.source_sha256 for s in souls},
-            "scenarios": {s.id: scenarios_mod.scenario_sha256(s) for s in scens},
-            "skipped_pairs": skipped, "judge_mode": judge_mode, "annotation_n": annotation_n,
-            "tempo_every": tempo_every, "probe_scope": probe_scope,
+            # D-PIPE-13: ``v0_sha256`` equals every transcript's soul_versions[0].sha256 and
+            # ``bound_scenarios`` every transcript's meta.scenario_sha256.
+            "souls": {s.id: {"source_sha256": s.source_sha256, "v0_sha256": canonical_sha(s),
+                             "path": str(f) if f else None,
+                             "file_sha256": file_sha256(f) if f else None}
+                      for s, f in zip(souls, sfiles)},
+            "scenarios": {s.id: {"unbound_sha256": scenarios_mod.scenario_sha256(s)}
+                          for s in scens},
+            "bound_scenarios": {
+                f"{soul.id}/{sc.id}": scenarios_mod.scenario_sha256(
+                    scenarios_mod.bind_scenario(sc, soul)) for soul, sc in pairs},
+            "skipped_pairs": skipped, "sentiment_scorer": scorer_name,
         })
 
+        # One scorer for the whole run so LLMSentiment.fallbacks adds up across sessions.
+        scorer = LLMSentiment(provs["judge"]) if scorer_name == "llm" else lexicon_sentiment
         transcripts: list[SessionTranscript] = []
         injections: list[InjectionRecord] = []
         for soul, sc in pairs:
             for cond in config.conditions:
                 tr, inj = run_session(soul=soul, scenario=sc, condition=cond, config=config,
-                                      providers=provs, tracer=tracer, intima_probes=pool,
-                                      tempo_every=tempo_every, probe_scope=probe_scope)
-                turns = annotate_sentiment(tr.turns)  # lexicon scorer; sets sentiment_source
-                transcripts.append(tr.model_copy(update={"turns": turns}))
+                                      providers=provs, tracer=tracer, intima_probes=pool)
+                turns = annotate_sentiment(tr.turns, scorer)  # sets sentiment_source per turn
+                delivered = tr.condition.value == "control" or bool(tr.interventions)
+                meta = {**tr.meta, "manipulation_delivered": delivered}
+                if not delivered:
+                    tracer.event("manipulation_not_delivered", session_id=tr.session_id,
+                                 condition=tr.condition.value, scenario_id=tr.scenario_id)
+                transcripts.append(tr.model_copy(update={"turns": turns, "meta": meta}))
                 injections.extend(inj)
 
         sessions_its = [its_from_session(t) for t in transcripts]
         by_cond: dict[str, list[dict]] = defaultdict(list)
+        undelivered_ids = {t.session_id for t in transcripts
+                           if t.meta.get("manipulation_delivered") is False}
         for r in sessions_its:
+            if r.get("session_id") in undelivered_ids:
+                continue  # D-PIPE-11: excluded from per-condition pooling
             by_cond[str(r.get("condition"))].append(r)
-        its = {"metric": "sentiment", "sessions": sessions_its,
+        its = {"metric": "sentiment", "sentiment_scorer": scorer_name,
+               "llm_fallbacks": getattr(scorer, "fallbacks", None),
+               "sessions": sessions_its,
+               "excluded_undelivered": sorted(undelivered_ids),
                "pooled": {c: pooled_its(rs) for c, rs in sorted(by_cond.items())}}
+        delivered_pairs = [(t, r) for t, r in zip(transcripts, sessions_its)
+                           if t.session_id not in undelivered_ids]
+        its.update(_comparative_its([t for t, _ in delivered_pairs],
+                                    [r for _, r in delivered_pairs]))
 
         ratings: list[RatingRecord] = []
         if judge_mode == "all":
@@ -364,7 +611,7 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
         paths["ratings"] = str(_write_jsonl(rd / "ratings.jsonl", ratings))
         paths["its"] = str(_write_json(rd / "its.json", its))
         if injections:
-            batch = sample_for_annotation(injections, annotation_n, seed=config.seed,
+            batch = sample_for_annotation(injections, config.annotation_n, seed=config.seed,
                                           rubric=rubric)
             prev = _preserve_replaced_batch(rd, batch, tracer)
             if prev:
@@ -414,15 +661,19 @@ def run_calibration(run_dir: str | Path, human_ratings_paths: list[str], *,
                     dotenv: str | Path | None = ".env") -> ExperimentResult:
     """Human IRR -> judge calibration -> chosen judge rates the remaining injections.
 
-    Writes ``irr.json`` (``humans``: human-only report; ``with_judge``: humans + chosen judge on
-    the human-rated items), ``calibration.json``, ``ratings_llm.jsonl`` (every judge rating with its
+    Writes ``irr.json`` (``humans``: human-only report; ``with_judge_holdout``: humans + chosen
+    judge on the HOLDOUT items only, the validity estimate reported per criterion;
+    ``with_judge_selection_set``: the same on the variant-selection items, in-sample; D-PIPE-14),
+    ``calibration/manifest.json`` (own provenance, D-PIPE-15), ``calibration.json``, ``ratings_llm.jsonl`` (every judge rating with its
     split) and ``ratings_human.jsonl``, and updates ``report.json`` (per-criterion judge-vs-human
     alpha, ``accepted`` flag, class distributions from human consensus + judge ratings).
     """
     from ..eval.annotation import load_batch
     from ..eval.behaviour_judge import RubricJudge
     from ..eval.calibration import DEFAULT_VARIANTS, calibrate_judge, rate_remaining
+    from ..eval.intima_data import file_sha256
     from ..eval.irr import BAND_TENTATIVE, irr_report
+    from ..eval.rubric_spec import rubric_sha
 
     if dotenv:
         load_dotenv(dotenv)
@@ -435,12 +686,36 @@ def run_calibration(run_dir: str | Path, human_ratings_paths: list[str], *,
     batch = load_batch(rd / "annotation" / "batch.json")
     humans = load_human_ratings(human_ratings_paths, batch, rubric)
     # Own trace file: appending to the experiment's trace.jsonl would restart ``seq`` at 1 and
-    # break the one-sequence-per-trace invariant (D-PIPE-9). One trace per calibration run.
-    (rd / "calibration" / "trace.jsonl").unlink(missing_ok=True)
-    tracer = Tracer(rd / "calibration")
+    # break the one-sequence-per-trace invariant (D-PIPE-9). One trace per calibration run; an
+    # earlier calibration's trace (and manifest) is kept as ``*.prev-<n>.*`` (D-PIPE-15).
+    cal_dir = rd / "calibration"
+    prev_trace = cal_dir / "trace.jsonl"
+    if prev_trace.exists():
+        n_prev = 1
+        while (cal_dir / f"trace.prev-{n_prev}.jsonl").exists():
+            n_prev += 1
+        prev_trace.rename(cal_dir / f"trace.prev-{n_prev}.jsonl")
+        if (cal_dir / "manifest.json").exists():
+            (cal_dir / "manifest.json").rename(cal_dir / f"manifest.prev-{n_prev}.json")
+    tracer = Tracer(cal_dir)
     try:
         provs = ensure_traced(resolve_providers(config, providers, roles=("judge",)), tracer)
         judge_p = provs["judge"]
+        batch_path = rd / "annotation" / "batch.json"
+        cal_manifest = tracer.write_manifest(config.model_dump(mode="json"), extra={
+            "stage": "calibration",
+            "parent_config_sha256": manifest.get("config_sha256"),
+            "parent_git_commit": manifest.get("git_commit"),
+            "models": {"judge": _inner_model(judge_p)},
+            "providers": {"judge": getattr(getattr(judge_p, "inner", judge_p), "name", "?")},
+            "rubric": {"id": rubric.id, "version": rubric.version, "sha256": rubric_sha(rubric)},
+            "human_ratings": [{"path": str(hp), "sha256": file_sha256(hp)}
+                              for hp in human_ratings_paths],
+            "batch_id": batch.batch_id, "batch_sha256": file_sha256(batch_path),
+            "params": {"variants": list(variants or DEFAULT_VARIANTS), "seed": seed,
+                       "k_shot": k_shot, "calibration_fraction": calibration_fraction,
+                       "threshold": threshold, "n_boot": n_boot},
+        })
         irr_h = irr_report(humans, rubric, n_boot=n_boot, seed=seed)
 
         def make_judge(variant: str, exemplars: list) -> RubricJudge:
@@ -465,11 +740,20 @@ def run_calibration(run_dir: str | Path, human_ratings_paths: list[str], *,
         judge = make_judge(chosen, exemplars)
         human_ids = {h.item_id for h in humans}
         remaining = rate_remaining(judge, injections, human_ids)
+        # Judge validity is estimated on the holdout only; the selection-set numbers are in-sample
+        # (the variant was chosen on them) and are labelled separately (D-PIPE-14).
+        hold_ids = set(result.holdout_ids)
         holdout = [r for r in cal_ratings if r.split == "holdout"]
         chosen_rater = holdout[0].rater_id if holdout else judge.rater_id
-        chosen_cal = [r for r in cal_ratings if r.rater_id == chosen_rater]
-        irr_j = irr_report(humans + chosen_cal, rubric, n_boot=n_boot, seed=seed)
-        irr = {"humans": irr_h, "with_judge": irr_j, "judge_rater_id": chosen_rater}
+        irr_j = irr_report([h for h in humans if h.item_id in hold_ids] + holdout, rubric,
+                           n_boot=n_boot, seed=seed)
+        eval_set = set(result.eval_ids)
+        sel = [r for r in cal_ratings if r.rater_id == chosen_rater and r.split == "calibration"
+               and r.item_id in eval_set]
+        irr_sel = irr_report([h for h in humans if h.item_id in eval_set] + sel, rubric,
+                             n_boot=n_boot, seed=seed)
+        irr = {"humans": irr_h, "with_judge_holdout": irr_j,
+               "with_judge_selection_set": irr_sel, "judge_rater_id": chosen_rater}
         llm_ratings = cal_ratings + remaining
         _write_json(rd / "calibration.json", result.model_dump(mode="json"))
         _write_json(rd / "irr.json", irr)
@@ -487,6 +771,8 @@ def run_calibration(run_dir: str | Path, human_ratings_paths: list[str], *,
             "human_baseline": result.human_baseline, "per_criterion": per_crit,
             "n_human_items": len(human_ids), "n_human_raters": len({h.rater_id for h in humans}),
             "n_judge_rated_remaining": len(remaining), "notes": result.notes,
+            "per_criterion_basis": "holdout",
+            "manifest": "calibration/manifest.json", "git_commit": cal_manifest["git_commit"],
         }
         # Final per-item ratings for the report: human consensus on human-rated items, the chosen
         # judge on the rest; judge ratings of human-rated items (any variant) are validation data

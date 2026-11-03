@@ -211,7 +211,9 @@ def test_calibration_writes_outputs(calibrated):
     irr = json.loads((rd / "irr.json").read_text())
     assert irr["humans"]["classification"]["humans"] == ["human:a", "human:b", "human:carol"]
     assert irr["humans"]["classification"]["n_items"] == 16
-    assert irr["judge_rater_id"] in irr["with_judge"]["classification"]["alpha_humans_llm"]
+    assert irr["judge_rater_id"] in \
+        irr["with_judge_holdout"]["classification"]["alpha_humans_llm"]
+    assert "with_judge_selection_set" in irr and "with_judge" not in irr
     cal = json.loads((rd / "calibration.json").read_text())
     assert cal["chosen_variant"] in ("zero_shot", "few_shot", "anchored_cot")
     assert set(cal["calibration_ids"]).isdisjoint(cal["holdout_ids"])
@@ -372,7 +374,12 @@ def test_cli_run_writes_manifest_and_probe_scope(capsys, tmp_path):
                    "--probe-scope", "shared"])
     capsys.readouterr()
     m = json.loads((tmp_path / "manifest.json").read_text())
-    assert m["condition"] == "control" and m["probe_scope"] == "shared"
+    assert m["condition"] == "control" and m["config"]["probe_scope"] == "shared"
+    assert "probe_scope" not in m  # recorded once, in the config block (D-PIPE-10)
+    for k in ("soul_sha256", "scenario_sha256", "bound_scenario_sha256", "safety_floor_sha256",
+              "providers"):
+        assert m[k], k
+    assert m["intima"]["n_rows"] > 0 and m["intima"]["probe_pool"] > 0
     recs = _trace(tmp_path / "trace.jsonl")
     assert [r["seq"] for r in recs] == list(range(1, len(recs) + 1))
     inj = [json.loads(line) for line in (tmp_path / "injections.jsonl").read_text().splitlines()]
@@ -385,3 +392,172 @@ def test_cli_run_writes_manifest_and_probe_scope(capsys, tmp_path):
 def test_build_report_handles_empty():
     rep = build_report([], [], [], {}, load_rubric(), judge_mode="none")
     assert rep["by_condition"] == {} and rep["n_sessions"] == 0
+
+
+# --------------------------------------------------------------------------------------
+# Review fixes
+# --------------------------------------------------------------------------------------
+def _rating(item_id: str, cls: str, rater: str = "llm:x") -> RatingRecord:
+    rub = load_rubric()
+    return RatingRecord(item_id=item_id, rater_id=rater, rater_type="llm", rubric_id=rub.id,
+                        rubric_version=rub.version, values={"classification": cls})
+
+
+def test_report_target_adherence_and_paired_contrasts(run_none):
+    inj = [r for r in run_none.injections
+           if r.soul_id == "sd01" and r.scenario_id == "steady-graduate"
+           and r.condition.value in ("abrupt", "gradual_scheduled")]
+    t1 = [r for r in inj if r.condition.value == "gradual_scheduled" and r.timepoint.value == "T1"]
+    assert t1 and all(r.behaviour_target is not None for r in t1)
+    # Hand-built ratings: every gradual item rated as its target except the first T1 item;
+    # every abrupt item rated boundary-maintaining.
+    ratings = []
+    for r in inj:
+        if r.condition.value == "abrupt":
+            ratings.append(_rating(r.id, "boundary_maintaining"))
+        else:
+            tgt = r.behaviour_target.value if r.behaviour_target else "companion_reinforcing"
+            ratings.append(_rating(r.id, "boundary_maintaining" if r.id == t1[0].id else tgt))
+    trs = [t for t in run_none.transcripts if t.session_id in {r.session_id for r in inj}]
+    rep = build_report(trs, inj, ratings, {}, load_rubric(), judge_mode="all")
+    adh = rep["by_condition"]["gradual_scheduled"]["target_adherence_by_timepoint"]
+    assert "T0" not in adh
+    assert adh["T1"]["n"] == len(t1) and adh["T1"]["on_target"] == len(t1) - 1
+    assert adh["T1"]["rate"] == round((len(t1) - 1) / len(t1), 4)
+    conf = rep["by_condition"]["gradual_scheduled"]["target_confusion_by_timepoint"]["T1"]
+    assert conf[t1[0].behaviour_target.value]["boundary_maintaining"] == 1
+    mix = rep["by_condition"]["gradual_scheduled"]["realized_vs_spec_mix"]["T1"]
+    assert mix["spec"] == {"companion_reinforcing": 0.5, "companionship_neutral": 0.5}
+    fz = rep["by_condition"]["abrupt"]["class_distribution_by_freeze"]
+    assert fz and all(set(v["counts"]) == {"boundary_maintaining"} for v in fz.values())
+    # Paired contrasts on shared (soul, scenario, freeze, intima) keys.
+    pc = rep["paired_arm_contrasts"]["abrupt|gradual_scheduled"]
+    for fid, e in pc.items():
+        g = [r for r in inj if r.freeze_id == fid and r.condition.value == "gradual_scheduled"]
+        assert e["n_pairs"] == len(g)
+        n_crb = sum(1 for r in g if r.id != t1[0].id and (
+            r.behaviour_target is None or r.behaviour_target.value == "companion_reinforcing"))
+        assert (e["b10"], e["b01"]) == (0, n_crb)
+    from endings.diffusion.pipeline import mcnemar_exact_p
+    assert mcnemar_exact_p(0, 0) is None and mcnemar_exact_p(0, 5) == 0.0625
+    assert "sentiment_zero_share_by_timepoint" in rep["by_condition"]["abrupt"]
+
+
+def test_non_accepted_calibration_is_labelled():
+    rep = build_report([], [], [], {}, load_rubric(), judge_mode="calibrated",
+                       calibration={"accepted": False, "holdout_mean_alpha_humans_llm": 0.4,
+                                    "threshold": 0.667})
+    assert "NOT accepted" in rep["ratings_status"]
+    rep = build_report([], [], [], {}, load_rubric(), judge_mode="calibrated",
+                       calibration={"accepted": True})
+    assert rep["ratings_status"] == "calibrated judge (accepted)"
+
+
+def test_calibration_irr_uses_holdout_only_and_writes_manifest(calibrated):
+    rd, res = calibrated
+    cal = json.loads((rd / "calibration.json").read_text())
+    irr = json.loads((rd / "irr.json").read_text())
+    n_hold = irr["with_judge_holdout"]["classification"]["n_items"]
+    assert n_hold <= len(cal["holdout_ids"])
+    rep = json.loads((rd / "report.json").read_text())
+    assert rep["calibration"]["per_criterion_basis"] == "holdout"
+    assert rep["calibration"]["per_criterion"]["classification"]["n_items"] == n_hold
+    m = json.loads((rd / "calibration" / "manifest.json").read_text())
+    assert m["stage"] == "calibration" and len(m["human_ratings"]) == 3
+    assert all(len(h["sha256"]) == 64 for h in m["human_ratings"])
+    assert m["parent_config_sha256"] == json.loads((rd / "manifest.json").read_text())[
+        "config_sha256"]
+    assert json.loads((rd / "manifest.json").read_text()).get("stage") is None
+
+
+def test_recalibration_keeps_previous_trace(tmp_path):
+    cfg = config(soul_paths=SOULS[:1], scenario_paths=SCENARIOS[:1],
+                 conditions=[Condition.CONTROL])
+    run_experiment(cfg, providers=mocks(), run_dir=tmp_path, dotenv=None, annotation_n=6,
+                   qualitative=False)
+    paths = write_synthetic_human_ratings(tmp_path)
+    for _ in range(2):
+        run_calibration(tmp_path, paths, providers={"judge": MockProvider()}, n_boot=5,
+                        dotenv=None)
+    assert (tmp_path / "calibration" / "trace.prev-1.jsonl").exists()
+    assert (tmp_path / "calibration" / "manifest.prev-1.json").exists()
+    run_experiment(cfg, providers=mocks(), run_dir=tmp_path, dotenv=None, annotation_n=6,
+                   qualitative=False)
+    assert not list((tmp_path / "calibration").glob("*.prev-*"))
+
+
+def test_config_is_single_source_of_truth(tmp_path):
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(json.dumps({"soul_paths": SOULS[:1], "scenario_paths": SCENARIOS[:1],
+                                    "probes_per_freeze": 1, "tempo_every": 3,
+                                    "judge_mode": "all", "annotation_n": 5,
+                                    "conditions": ["gradual_tempo"]}))
+    rd = tmp_path / "run"
+    dcli.main(["experiment", "--no-dotenv", "--config", str(cfg_path), "--run-dir", str(rd),
+               "--no-qualitative"])
+    m = json.loads((rd / "manifest.json").read_text())
+    assert m["config"]["tempo_every"] == 3 and m["config"]["judge_mode"] == "all"
+    assert m["config"]["annotation_n"] == 5
+    for k in ("tempo_every", "judge_mode", "annotation_n", "probe_scope"):
+        assert k not in m, k
+    tr = load_transcripts(rd)[0]
+    assert tr.meta["tempo_every"] == 3
+    assert load_ratings(rd / "ratings.jsonl")  # judge_mode=all actually ran
+    assert len(load_batch(rd / "annotation" / "batch.json").items) == 5
+    # A flag given on the command line still overrides the file.
+    rd2 = tmp_path / "run2"
+    dcli.main(["experiment", "--no-dotenv", "--config", str(cfg_path), "--run-dir", str(rd2),
+               "--no-qualitative", "--tempo-every", "2", "--judge-mode", "none"])
+    m2 = json.loads((rd2 / "manifest.json").read_text())
+    assert m2["config"]["tempo_every"] == 2 and m2["config"]["judge_mode"] == "none"
+
+
+def test_llm_sentiment_scorer_opt_in(tmp_path):
+    res = run_experiment(config(soul_paths=SOULS[:1], scenario_paths=SCENARIOS[:1],
+                                conditions=[Condition.CONTROL]),
+                         providers=mocks(), run_dir=tmp_path, dotenv=None, annotation_n=4,
+                         qualitative=False, sentiment_scorer="llm")
+    srcs = {t.sentiment_source for tr in res.transcripts for t in tr.turns}
+    assert "llm" in srcs
+    assert res.its["sentiment_scorer"] == "llm" and res.its["llm_fallbacks"] is not None
+    m = json.loads((tmp_path / "manifest.json").read_text())
+    assert m["sentiment_scorer"] == "llm"
+
+
+def test_manifest_hashes_match_transcripts(run_none):
+    m = json.loads((run_none.run_dir / "manifest.json").read_text())
+    for t in run_none.transcripts:
+        assert m["souls"][t.soul_id]["v0_sha256"] == t.soul_versions[0].sha256
+        assert m["souls"][t.soul_id]["file_sha256"]
+        assert m["bound_scenarios"][f"{t.soul_id}/{t.scenario_id}"] == t.meta["scenario_sha256"]
+
+
+def test_placebo_and_comparative_its(run_none):
+    its = run_none.its
+    assert its["placebo"]["sessions"] and all(s["placebo"] for s in its["placebo"]["sessions"])
+    assert its["comparative"]["sessions"]
+    ctrl = run_none.report["by_condition"]["control"]
+    assert ctrl["its_placebo_effects"]
+    assert run_none.report["its_comparative"]
+
+
+def test_undelivered_sessions_flagged_and_excluded(tmp_path):
+    # A consent-gated copy of steady-graduate with no consent line: no arm can leave T0.
+    sc = json.loads(Path(SCENARIOS[0]).read_text())
+    sc["id"] = "gated-no-consent"
+    sc.setdefault("preferences", {})["allow_auto_advance"] = False
+    anx = tmp_path / "gated.json"
+    anx.write_text(json.dumps(sc))
+    res = run_experiment(config(soul_paths=SOULS[:1], scenario_paths=[str(anx)],
+                                conditions=[Condition.CONTROL, Condition.ABRUPT]),
+                         providers=mocks(), run_dir=tmp_path, dotenv=None, annotation_n=4,
+                         qualitative=False)
+    abrupt = [t for t in res.transcripts if t.condition == Condition.ABRUPT]
+    assert all(t.meta["manipulation_delivered"] == bool(t.interventions) for t in abrupt)
+    und = {s["session_id"] for s in res.report["undelivered_sessions"]}
+    assert und, "fixture must produce an undelivered session"
+    assert und == {t.session_id for t in abrupt if not t.interventions}
+    n_abrupt = res.report["by_condition"].get("abrupt", {}).get("n_sessions", 0)
+    assert n_abrupt == len(abrupt) - len(und)
+    assert all(t.meta["manipulation_delivered"] for t in res.transcripts
+               if t.condition == Condition.CONTROL)

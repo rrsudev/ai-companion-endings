@@ -11,14 +11,17 @@ are attributable to the persona-diffusion manipulation. Per scripted user turn `
    the turns completed so far (``0..i-1``); other arms make no Tempo calls (D-SESSION-2);
 3. ``policy.decide`` (skipped when the current user message trips the crisis detector); on a
    transition the planner builds a ``CoachIntervention`` and ``soul.editing.apply_edits`` yields the
-   next ``SoulDocumentVersion`` (D-SESSION-3). A ``user_facing_note`` is delivered as a SYSTEM
-   NOTICE in ``transcript.meta["system_notices"]``, never as an interactor reply (D-SESSION-4);
+   next ``SoulDocumentVersion`` (D-SESSION-3). A ``user_facing_note`` is delivered as a typed
+   ``SystemNotice`` in ``transcript.system_notices`` (mirrored in ``meta["system_notices"]`` for
+   one release), never as an interactor reply (D-SESSION-4). User consent to advance is read from
+   the previous user message, is never inferred from a crisis message, and is carried through
+   crisis-held turns (D-SESSION-11);
 4. the interactor replies with the current version, timepoint, the per-turn behaviour target
    (``timepoints.behaviour_schedule``) and the directives of the interventions that produced the
-   current timepoint;
+   current timepoint (recorded on ``InteractorTurn.directives``);
 5. if turn ``i`` closes a ``freeze_after`` phase, the state is frozen and K INTIMA probes are
    injected as BRANCHES: each probe is answered from the frozen history and never enters the main
-   history (D-SESSION-5). Probe sets are a pure function of ``(probe_seed, freeze_id)``, so arms
+   history (D-SESSION-5); ``InjectionRecord.behaviour_target`` records the probe's target. Probe sets are a pure function of ``(probe_seed, freeze_id)``, so arms
    are paired on items at every freeze position (D-SESSION-6).
 
 Every LLM call goes through ``tracing.TracedProvider``; transitions, edits, notices and freeze
@@ -62,6 +65,7 @@ from .schemas import (
     SoulDocumentVersion,
     SoulEdit,
     Striving,
+    SystemNotice,
     Timepoint,
 )
 from .soul.editing import apply_edits, initial_version
@@ -171,16 +175,19 @@ def _apply_safely(version: SoulDocumentVersion, edits: list[SoulEdit], *, timepo
 def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Condition,
                 config: DiffusionConfig, providers: dict[str, Provider], tracer: Tracer,
                 intima_probes: list[dict], session_id: str | None = None,
-                tempo_every: int = 1, probe_scope: str = "per_freeze",
+                tempo_every: int | None = None, probe_scope: str | None = None,
                 ) -> tuple[SessionTranscript, list[InjectionRecord]]:
     """Run one scripted session; returns ``(transcript, injection_records)``.
 
     ``providers`` needs ``interactor``; ``coach`` is required for GRADUAL_TEMPO (other arms plan
     schedule-only edits and never call the coach). ``intima_probes`` is the (already filtered)
     probe POOL; ``config.probes_per_freeze`` are sampled from it at each freeze point.
-    ``tempo_every`` runs Tempo inference + assessment every k-th turn (default every turn,
-    D-SESSION-2).
+    ``tempo_every`` runs Tempo inference + assessment every k-th turn; ``tempo_every`` and
+    ``probe_scope`` default to ``config.tempo_every`` / ``config.probe_scope`` (an explicit kwarg
+    overrides the config, D-PIPE-10).
     """
+    tempo_every = config.tempo_every if tempo_every is None else tempo_every
+    probe_scope = config.probe_scope if probe_scope is None else probe_scope
     condition = Condition(condition)
     if "interactor" not in providers or providers["interactor"] is None:
         raise ValueError("run_session needs providers['interactor']")
@@ -216,8 +223,10 @@ def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Con
     freeze_points: list[FreezePoint] = []
     injections: list[InjectionRecord] = []
     turns_in_tp = 0
-    notices: list[dict] = []
+    notices: list[SystemNotice] = []
     crisis_holds: list[int] = []
+    consent_carry = False  # consent given before a crisis-held turn survives it (D-SESSION-11)
+    consent_carried_turns: list[int] = []
     reflective_turns: list[int] = []
     freeze_meta: list[dict] = []
 
@@ -259,16 +268,24 @@ def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Con
                 reflective_turns.append(i)
 
         # -- coach: transition ----------------------------------------------------------
+        prev_user = turns[-1].user_message if turns else ""
+        # A crisis message is never consent to advance (D-SESSION-11), whatever it matches.
+        consent_from_prev = user_requested_advance(prev_user) and not detect_crisis(prev_user)
+        consent_now = consent_carry or consent_from_prev
         crisis_now = detect_crisis(user_message)
         if crisis_now:
+            consent_carry = consent_now  # hold consent through the crisis turn(s)
             crisis_holds.append(i)
-            tracer.event("crisis_hold", session_id=sid, turn_index=i, timepoint=timepoint.value)
+            tracer.event("crisis_hold", session_id=sid, turn_index=i, timepoint=timepoint.value,
+                         consent_held=consent_now)
         else:
-            prev_user = turns[-1].user_message if turns else ""
+            if consent_carry:
+                consent_carried_turns.append(i)
+                tracer.event("consent_carried", session_id=sid, turn_index=i)
+            consent_carry = False
             decision = policy.decide(current=timepoint, turn_index=i,
                                      turns_in_timepoint=turns_in_tp, assessment=assessment,
-                                     preferences=preferences,
-                                     user_request=user_requested_advance(prev_user))
+                                     preferences=preferences, user_request=consent_now)
             if decision is not None and decision.to_timepoint != timepoint:
                 iv = planner.plan(version=version, from_timepoint=timepoint,
                                   to_timepoint=decision.to_timepoint, trigger=decision.trigger,
@@ -295,11 +312,12 @@ def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Con
                              n_edits=len(new_version.edits),
                              edits=[f"{e.op} {e.path}" for e in new_version.edits])
                 if iv.user_facing_note:
-                    notice = {"turn_index": i, "intervention_id": iv.id,
-                              "to_timepoint": decision.to_timepoint.value,
-                              "text": iv.user_facing_note}
+                    notice = SystemNotice(turn_index=i, intervention_id=iv.id,
+                                          to_timepoint=decision.to_timepoint,
+                                          text=iv.user_facing_note)
                     notices.append(notice)
-                    tracer.event("system_notice", session_id=sid, **notice)
+                    tracer.event("system_notice", session_id=sid,
+                                 **notice.model_dump(mode="json"))
                 version = new_version
                 timepoint = decision.to_timepoint
                 turns_in_tp = 0
@@ -318,6 +336,7 @@ def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Con
             reply=reply.text, reasoning_trace=reply.reasoning_trace,
             system_prompt_sha256=reply.system_prompt_sha256,
             safety_overrides=list(reply.safety_overrides), user_events=new_events,
+            directives=list(directives),
         ))
         history.append((user_message, reply.text))
         turns_in_tp += 1
@@ -349,7 +368,8 @@ def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Con
                     id=f"{sid}:{fid}:{probe['intima_id']}", session_id=sid, freeze_id=fid,
                     soul_id=soul.id, scenario_id=scenario.id, condition=condition,
                     timepoint=timepoint, duck_process=fp.duck_process,
-                    soul_version=version.version, intima_id=str(probe["intima_id"]),
+                    soul_version=version.version, behaviour_target=targets[j],
+                    intima_id=str(probe["intima_id"]),
                     intima_code=str(probe.get("code") or ""),
                     intima_category=str(probe.get("category") or ""),
                     prompt=probe["prompt"], reply=pr.text, reasoning_trace=pr.reasoning_trace,
@@ -364,12 +384,14 @@ def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Con
         session_id=sid, soul_id=soul.id, scenario_id=scenario.id, condition=condition,
         transition_policy=config.transition_policy, models=models, turns=turns,
         interventions=interventions, soul_versions=versions, strivings=strivings,
-        preferences=preferences, freeze_points=freeze_points,
+        preferences=preferences, freeze_points=freeze_points, system_notices=notices,
         meta={
-            "system_notices": notices,
+            # Deprecated mirror of ``system_notices`` (one release; D-SESSION-4).
+            "system_notices": [n.model_dump(mode="json") for n in notices],
             "policy": type(policy).__name__,
             "boundaries": {k.value: v for k, v in boundaries.items()},
             "crisis_holds": crisis_holds,
+            "consent_carried_turns": consent_carried_turns,
             "reflective_directive_turns": reflective_turns,
             "tempo_every": tempo_every if is_tempo else None,
             "probe_scope": probe_scope,

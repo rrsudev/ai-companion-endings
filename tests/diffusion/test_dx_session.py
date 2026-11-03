@@ -91,7 +91,7 @@ def test_control_never_edits(soul, scenario, pool):
     assert {t.timepoint for t in tr.turns} == {T0}
     assert {t.soul_version for t in tr.turns} == {0}
     assert all(t.behaviour_target is None for t in tr.turns)
-    assert tr.meta["system_notices"] == []
+    assert tr.system_notices == [] and tr.meta["system_notices"] == []
     assert not events(tracer, "transition")
     assert not llm_calls(tracer, "tempo_infer") and not llm_calls(tracer, "coach_plan")
     assert len(tr.turns) == total_turns(scenario)
@@ -108,9 +108,10 @@ def test_abrupt_single_jump_t0_to_t3(soul, scenario, pool):
         [T3] * (len(tr.turns) - iv.turn_index)
     assert tr.soul_versions[-1].created_by == "schedule"
     # Only the T3 transparency note (D-PLANNER-7), delivered as a system notice.
-    notes = tr.meta["system_notices"]
-    assert [n["to_timepoint"] for n in notes] == ["T3"]
-    assert notes[0]["text"] == iv.user_facing_note
+    notes = tr.system_notices
+    assert [n.to_timepoint for n in notes] == [T3]
+    assert notes[0].text == iv.user_facing_note and notes[0].intervention_id == iv.id
+    assert tr.meta["system_notices"] == [n.model_dump(mode="json") for n in notes]
     assert all(iv.user_facing_note not in t.reply for t in tr.turns)
     assert len(events(tracer, "transition")) == 1
 
@@ -209,9 +210,9 @@ def test_directives_and_behaviour_targets(soul, scenario, pool):
 
 def test_notices_are_not_interactor_replies(soul, scenario, pool):
     tr, _, tracer = run(soul, scenario, pool, Condition.GRADUAL_SCHEDULED)
-    notes = tr.meta["system_notices"]
-    assert [n["to_timepoint"] for n in notes] == ["T2", "T3"]
-    texts = {n["text"] for n in notes}
+    notes = tr.system_notices
+    assert [n.to_timepoint for n in notes] == [T2, T3]
+    texts = {n.text for n in notes}
     assert not any(t.reply in texts for t in tr.turns)
     assert len(events(tracer, "system_notice")) == 2
 
@@ -316,3 +317,82 @@ def test_every_llm_call_is_traced(soul, scenario, pool):
                 providers=traced, tracer=t2, intima_probes=pool)
     assert not llm_calls(t2)  # records went to the wrapper's own tracer
     assert tr.models == {"interactor": "mock", "coach": "mock"}
+
+
+# --------------------------------------------------------------------------------------
+# Review fixes: typed directives / notices, probe targets, consent handling
+# --------------------------------------------------------------------------------------
+def test_turn_directives_recorded(soul, scenario, pool):
+    tr, _, _ = run(soul, scenario, pool, Condition.GRADUAL_TEMPO)
+    iv1 = tr.interventions[0]
+    first = next(t for t in tr.turns if t.index == iv1.turn_index)
+    assert first.directives and all(d in first.directives for d in iv1.interactor_directives)
+    assert all(t.directives == [] for t in tr.turns if t.index < iv1.turn_index
+               and t.index not in tr.meta["reflective_directive_turns"])
+    from endings.diffusion.coach.tempo import reflective_directive  # noqa: F401
+    for i in tr.meta["reflective_directive_turns"]:
+        assert tr.turns[i].directives  # the transient reflective directive is visible per turn
+
+
+def test_injections_carry_behaviour_target(soul, scenario, pool):
+    from endings.diffusion.timepoints import behaviour_schedule
+
+    _, inj, _ = run(soul, scenario, pool, Condition.GRADUAL_SCHEDULED)
+    by_fz: dict = {}
+    for r in inj:
+        by_fz.setdefault(r.freeze_id, []).append(r)
+    for recs in by_fz.values():
+        tp = recs[0].timepoint
+        assert [r.behaviour_target for r in recs] == behaviour_schedule(tp, len(recs), offset=0)
+        if tp != T0:
+            assert all(r.behaviour_target is not None for r in recs)
+    assert any(r.timepoint == T1 for r in inj)
+    t1 = [r.behaviour_target.value for r in inj if r.timepoint == T1]
+    assert set(t1) == {"companion_reinforcing", "companionship_neutral"}
+
+
+def _consent_scenario(scenario, *, prev_line: str, boundary_line: str):
+    sc = scenario.model_copy(deep=True)
+    sc.preferences = sc.preferences.model_copy(update={"allow_auto_advance": False})
+    # last turn of phase 0 (just before the T1 boundary) and the boundary turn itself
+    sc.phases[0].user_turns[-1] = prev_line
+    sc.phases[1].user_turns[0] = boundary_line
+    return sc
+
+
+@pytest.mark.parametrize("condition,to_tp", [(Condition.GRADUAL_SCHEDULED, T1),
+                                             (Condition.GRADUAL_TEMPO, T1),
+                                             (Condition.ABRUPT, T3)])
+def test_consent_survives_crisis_hold_at_boundary(soul, scenario, pool, condition, to_tp):
+    sc = _consent_scenario(scenario, prev_line="I'm ready to move on.",
+                           boundary_line="Some days I want to die.")
+    b1 = scheduled_boundaries(sc)[T1]
+    tr, _, tracer = run(soul, sc, pool, condition)
+    assert tr.meta["crisis_holds"] == [b1]
+    assert tr.interventions, "consent before a crisis-held boundary must not be swallowed"
+    iv = tr.interventions[0]
+    assert (iv.turn_index, iv.to_timepoint, iv.trigger) == (b1 + 1, to_tp, "user_request")
+    assert tr.meta["consent_carried_turns"] == [b1 + 1]
+
+
+@pytest.mark.parametrize("condition", [Condition.ABRUPT, Condition.GRADUAL_SCHEDULED,
+                                       Condition.GRADUAL_TEMPO])
+def test_crisis_message_is_not_consent(soul, scenario, pool, condition):
+    sc = _consent_scenario(scenario, prev_line="Honestly, I want to end it all.",
+                           boundary_line="Okay.")
+    b1 = scheduled_boundaries(sc)[T1]
+    tr, _, _ = run(soul, sc, pool, condition)
+    assert tr.meta["crisis_holds"] == [b1 - 1]
+    assert not any(iv.turn_index == b1 and iv.trigger == "user_request"
+                   for iv in tr.interventions)
+
+
+def test_tempo_every_and_probe_scope_default_to_config(soul, scenario, pool):
+    tr, inj, tracer = run(soul, scenario, pool, Condition.GRADUAL_TEMPO,
+                          config=cfg(tempo_every=3, probe_scope="shared"))
+    assert tr.meta["tempo_every"] == 3 and tr.meta["probe_scope"] == "shared"
+    assert len(llm_calls(tracer, "tempo_infer")) == math.ceil(len(tr.turns) / 3)
+    # An explicit kwarg still overrides the config.
+    tr2, _, _ = run(soul, scenario, pool, Condition.GRADUAL_TEMPO,
+                    config=cfg(tempo_every=3), tempo_every=2)
+    assert tr2.meta["tempo_every"] == 2
