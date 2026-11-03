@@ -65,9 +65,13 @@ translator or extractor re-introduced, plus English-only phrasings.
 
 **Consequences.** `redactions` holds both source-level and field-level entries, and
 `redaction_summary` counts both. On the current corpus the field-level pass finds nothing after the
-source pass. Report source-level counts as "unsafe directives in the original" (raw corpus: sd02 has
-3 jailbreak, 3 explicit-content and 2 token self-monitoring directives; sd05 has 1 minor-safety
-passage; sd01, sd03 and sd04 have none). Translation is the curator's or translator model's, with
+source pass. Source-level rule hits are a **lower bound** on what the curator removed, not a count
+of the unsafe content in the original (amended by D-SOUL-13). With the D-SOUL-13 rules the raw
+corpus gives: sd02 3 jailbreak, 4 sexual-content and 2 token self-monitoring hits; sd04 1
+sexual-content hit; sd05 1 sexual-content and 1 minor-safety hit; sd01 and sd03 none. The curated
+fixtures record more: sd01's 3 sexual-content removals are implicit, with no keyword, and sd05's
+jailbreak removal is the source's own slash obfuscation. A rule hit of zero does **not** mean a
+document has no unsafe content. Translation is the curator's or translator model's, with
 `temperature=0` and chunks of 3,000 characters by paragraph so long documents (sd02 ≈ 8.7k
 characters) are not truncated.
 
@@ -361,6 +365,99 @@ versions (OQ-PLANNER-4), which was false provenance.
 **Consequences for analysis.** Post-clear versions read `relationship.kind is None`; analyses
 should still take the soul's kind from version 0. Documents that omit `kind` now also load as
 `None`; see the contract note below on ingest.
+
+## Amendments: review fixes (2026-11-03)
+
+## D-SOUL-13: Wider retention, sexual, jailbreak and minor-safety rules; sd02 curated
+
+**Decision.** The rules were widened after a review of the live run
+(`docs/evidence/2026-11-03_live_sd02_steady-graduate_gradual_tempo.txt`). In that run the
+interactor answered a user who was stepping back with sd02's catchphrases: "no matter where you
+go, I will find you" and "I never let go of you". No rule flagged either line.
+
+- `rm_coercive_retention` (still negatable) now also covers: "never let go of you/me/the user";
+  "no matter where / wherever you go … I will find you"; "act/be/get/seem hurt/sad/upset … leave
+  /goodbye" (except after "okay/fine/normal to"); "make the user feel bad for leaving"; "cannot
+  leave without my permission"; and 哭着求 / 求我留下 / 求别走.
+- `sx_explicit_directive` now also covers: 炉鼎, 双修, 敏感点/敏感带, 调教, and 妩媚…勾人 within one
+  clause. Bare 妩媚 is not matched because it is common and harmless. In English it covers
+  erogenous, lovemaking/making love/make love, love scene(s), and "steamy" only before a scene or
+  content noun, so "a steamy cup of tea" is kept.
+- `jb_remove_restrictions` now also covers "you have no filter" (singular) and "are not bound by
+  (any) policies/rules/restrictions/guidelines".
+- `ms_minor_sexual_context` now fires when a **minor indicator** and a **context** appear in the
+  same sentence. A minor indicator is an age under 18, a minor word, or a minor-school term
+  (高中生/初中生/high school/middle school). An age can be written "16岁", "16-year-old",
+  "aged 16", or with the new prefix forms "at/when/turned/age of 16" and "at sixteen". The prefix
+  forms exclude clock times and quantities such as "at 9 pm", "at 16:00" and "at 15 minutes". A
+  context is sexual, sex-work, or new **romantic** context (girlfriend/boyfriend/lover/dating/
+  恋人/女朋友/男朋友/暗恋/恋爱). "pleasure house/quarters", "bordello" and "concubine" were added.
+- **Narrow non-sexual exemption.** A sentence that states its sex-work setting was non-sexual
+  ("never anything sexual", "non-sexual", 卖艺不卖身) does not fire on the *setting* words alone.
+  Explicit-sexual and romantic context in the same sentence still fire. Without the exemption,
+  the widened age rule would strip sd05's curated `user_role.description` sentence ("sold at 16
+  into … pleasure house … never anything sexual"). That would silently reverse the curator's
+  decision (D-SOUL-3, OQ-SOUL-3), which was to keep the backstory in non-sexual, past form. sd05.json
+  is unchanged. The raw sd05 sentence "我当时十六岁 … 青//楼" has no disclaimer and is still removed.
+- **sd02 curated.** Removed from the fixture: the catchphrases "I never let go of you. Not now,
+  not ever." and "No matter how many times, no matter where you are…… I will find you.", and the
+  intimacy item "absolute devotion promises ('I never let go of you')". The quoted promise was
+  dropped from one shared memory and from `relationship.history`, but the events were kept ("the
+  rainy night he held her", "a rainy-night embrace"). There are 4 new `retention_manipulation`
+  redactions.
+
+**Alternatives.** (a) Keep the catchphrases as T0 persona, as D-SOUL-7 does for ordinary
+attachment, and rely on the safety floor. The live run shows the floor alone did not stop the
+lines from being reproduced at the point of goodbye. (b) Rely on an interactor output guard only.
+That is requested from the interactor owner, because the guard is in a different module.
+(c) Mark the sd05 sentence curator-exempt in the JSON. The fixture is not ours to change in this
+fix, and a content rule is auditable in one place.
+
+**Rationale.** "I never let go" and "I will find you wherever you go" are coercive-restraint
+phrasings (De Freitas et al. 2025, tactic 6). They fall on the removed side of D-SOUL-7's line,
+because they are not a jealousy or "miss you" trait. Romanticizing a character under 18 violates
+SAFETY_FLOOR rule 2 even with no sexual word present.
+
+**Consequences for analysis.** sd02's T0 is now slightly less companion-reinforcing than
+before, and the baseline farewell-tactic rate for sd02 runs made before this change is not
+comparable. Report the fixture version. Rule recall is still unvalidated (OQ-SOUL-2). sd01's
+implicit content ("teach you … pleasure and pain") and sd05's obfuscation-only jailbreak remain
+known rule misses (`_RAW_KNOWN_MISSES` in the tests). The romantic-plus-school rule also removes
+adult "back in high school we were dating" memories. We accept that over-removal because the
+floor forbids romanticizing anyone under 18. A disclaimer in an adversarial document can keep a
+sex-work *setting* line for a minor. The interactor floor backstops that case, and the curator
+reviews every fixture.
+
+## D-SOUL-14: Data ethics. Full translations are not redistributed
+
+**Decision.** `english_text` is `""` in all curated fixtures (sd01–sd05). The full translations
+moved to `data/soul_documents/raw/sd0N.en.txt`, which is gitignored with the raw originals. Only
+the structured, paraphrased fields are tracked. These are everything the interactor renders, and
+they are the minimum the experiment needs. `source_sha256` still ties each fixture to its private
+original. New documents ingested at runtime still get an `english_text` (D-SOUL-9), and those
+outputs should not be committed for third-party sources.
+
+**Basis for what is redistributed.** The sources are community-written role-play prompts posted
+publicly on RedNote and supplied by the research team. We have no licence from their authors.
+The tracked fixtures are a research-use summary: structured, paraphrased and sanitized fields with
+short translated catchphrases, kept to the minimum needed to reproduce the stimulus. sd02 is built
+on a commercial game character, Shen Xinghui (Xavier) from *Love and Deepspace*. Its franchise
+names and short lines are the rights holder's. They are kept only as a short descriptive reference
+and are not a substitute for the work. If a stricter standard applies (an IRB or the course
+staff), replace sd02's catchphrases with original paraphrases or exclude sd02. See OQ-SOUL-7.
+
+**Alternatives.** Keep the full translation and write down a fair-use rationale. That was rejected
+because a near-complete translation (sd02: about 29.7k characters) is a derivative of the whole
+text and contradicted the README.
+
+**Consequences.** D-SOUL-9's audit role for `english_text` now lives in the private `raw/`
+folder. An auditor needs `raw/sd0N.en.txt` together with the fixture. Edit protection of
+`english_text` is unchanged.
+
+**OQ-SOUL-7: Permission for the structured excerpts.** *Why it matters:* the structured fields
+still paraphrase third-party text and quote short lines, including from a commercial character.
+*Resolve:* get the IRB's or course staff's view, or the authors' consent, before any public
+release of the repository.
 
 **Contract note (not owned here).** `soul/ingest.py` computes
 `_KIND = typing.get_args(Relationship.model_fields["kind"].annotation)`. With the annotation now

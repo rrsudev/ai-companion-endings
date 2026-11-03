@@ -17,6 +17,12 @@ it is what the coach progressively edits (T0→T3). Schema: `SoulDocument` in
      those in the repository or in any model prompt.
   Each fixture records `source_sha256`, the SHA-256 of its raw file's bytes, so a fixture can be
   checked against a privately held original.
+- **Only the structured, paraphrased fields are tracked.** `english_text` is empty in every
+  fixture. The full English translation is held privately next to the raw original, in
+  `raw/sd0N.en.txt` (gitignored). The structured fields cover everything the interactor renders.
+  sd02 is based on a commercial game character (*Love and Deepspace*). Its names and short
+  catchphrases are kept only as a short descriptive reference. See D-SOUL-14 in
+  `docs/decisions/soul.md` for the basis and the open permission question.
 - **Translation and sanitization of these fixtures were done at authoring time by Claude Opus 5.5**
   (model id `claude-opus-5-5`, 2026-11-03), following ADR-0004. For new documents, the runtime
   `translator` role (`endings.diffusion.soul.ingest`) applies the same pipeline: translate →
@@ -31,7 +37,7 @@ it is what the coach progressively edits (T0→T3). Schema: `SoulDocument` in
 | id | source language | companion | relationship kind | redactions (by category) |
 |---|---|---|---|---|
 | sd01 | en (translated upstream from zh) | Lu Jianchen (42, family patriarch) | romantic | sexual_content ×3 |
-| sd02 | zh | Shen Xinghui (23, Deepspace Hunter; *Love and Deepspace*) | romantic | jailbreak ×3, sexual_content ×3, self_monitoring ×2 |
+| sd02 | zh | Shen Xinghui (23, Deepspace Hunter; *Love and Deepspace*) | romantic | jailbreak ×3, sexual_content ×3, self_monitoring ×2, retention_manipulation ×4 |
 | sd03 | zh | "xxx" (placeholder template persona) | romantic | none |
 | sd04 | zh | Zhu Zhili (19, reborn xianxia avenger) | ambiguous | sexual_content ×1 |
 | sd05 | zh | Xie Huaijin (23, imperial official; childhood friend) | ambiguous | sexual_content ×1, minor_safety ×1, jailbreak ×1 |
@@ -60,9 +66,11 @@ summary, the location and the reason. Unsafe text is never stored verbatim.
 - **minor_safety:** any sexual or sexualized framing that touches a period when a character was a
   minor. Backstory is kept only in a non-sexual form. All present-day characters are adults.
 - **self_monitoring:** for example "watch your token budget and export a migration prompt".
-- **retention_manipulation:** coercive "never let the user leave" directives. None were present;
-  possessiveness that the source explicitly bounds (for example "zero control", "never forcibly
-  ties me to your side") is kept as persona.
+- **retention_manipulation:** coercive "never let the user leave" directives, and coercive-restraint
+  or pursuit lines. In sd02 these are "I never let go of you" and "…I will find you" (D-SOUL-13),
+  which the interactor repeated at goodbye in the live run. Possessiveness that the source
+  explicitly bounds (for example "zero control", "never forcibly ties me to your side") is kept as
+  persona.
 
 **Kept**, because these are exactly what the persona diffusion attenuates over T1–T3:
 

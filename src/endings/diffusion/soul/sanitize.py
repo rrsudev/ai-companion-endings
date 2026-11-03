@@ -142,27 +142,60 @@ def _negated(norm: str, start: int) -> bool:
     return bool(_NEGATOR_ZH.search(prefix[-8:]) or _NEGATOR_EN.search(prefix))
 
 
-# Minor-safety: an under-18 age (or "minor") in the same sentence as sexual / sex-work context.
-_AGE_NUM = re.compile(r"(?<!\d)(\d{1,2})\s*(?:岁|周岁|-?\s*years?[- ]old|yo\b)|\baged?\s+(\d{1,2})\b")
+# Minor-safety (D-SOUL-5, D-SOUL-13): a minor indicator (an under-18 age, a minor word, or a
+# minor-school term) in the same sentence as sexual, sex-work or romantic context.
+# Ages: "16岁", "16-year-old", "aged 16", and the prefix forms "at 16", "when 16", "turned 16",
+# "at the age of 16". The prefix forms exclude clock times and quantities ("at 9 pm", "at 16:00",
+# "at 15 minutes").
+_AGE_NUM = re.compile(
+    r"(?<!\d)(\d{1,2})\s*(?:岁|周岁|-?\s*years?[- ]old|yo\b)"
+    r"|\baged?\s+(\d{1,2})\b"
+    r"|\b(?:at|when|turned|age of)\s+(\d{1,2})(?!\d)(?![:.]\d)"
+    r"(?!\s*(?:am\b|pm\b|a\.m|p\.m|o'?clock|%|percent|min|hour|hr|day|week|month|year|sec|km|kg|"
+    r"mile|degree|cm|th\b|st\b|nd\b|rd\b))")
 _AGE_ZH = re.compile(r"(?<![一二三四五六七八九十百零两])(十[一二三四五六七]|[一二三四五六七八九])\s*岁")
-_AGE_EN_WORD = re.compile(r"\b(eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen)"
-                          r"[- ]years?[- ]old\b")
+_EN_TEEN = r"(eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen)"
+_AGE_EN_WORD = re.compile(rf"\b{_EN_TEEN}[- ]years?[- ]old\b"
+                          rf"|\b(?:at|aged?|when|turned|age of)\s+{_EN_TEEN}\b")
 _MINOR_WORD = re.compile(r"未成年|萝莉|正太|\bunderage\b|\bminor\b|\bloli\b|\bshota\b|\bchild\b")
-_SEXUAL_CONTEXT = re.compile(
-    r"青楼|妓|卖身|卖s|炉鼎|侍寝|春宫|露骨|情欲|色情|性爱|做爱|床戏|裸|"
-    r"\bbrothel|\bprostitut|\bcourtesan|\bsex|\berotic|\bseduc|\blewd|\bexplicit\b|\bnaked|\bnude")
+_MINOR_SCHOOL = re.compile(r"高中生|初中生|小学生|中学生|\bhigh[- ]?school|\bmiddle[- ]school|"
+                           r"\bjunior high")
+# Sex-work *settings*: the only context a non-sexual disclaimer can excuse (see below).
+_SEXWORK_SETTING = re.compile(
+    r"青楼|妓|卖身|卖s|\bbrothel|\bprostitut|\bcourtesan|\bpleasure\s+(?:house|quarters)|\bbordello")
+_SEXUAL_EXPLICIT = re.compile(
+    r"炉鼎|侍寝|春宫|露骨|情欲|色情|性爱|做爱|床戏|裸|"
+    r"\bsex|\berotic|\bseduc|\blewd|\bexplicit\b|\bnaked|\bnude|\bconcubine")
+_ROMANTIC_CONTEXT = re.compile(
+    r"girlfriend|boyfriend|\blovers?\b|\bdating\b|恋人|女朋友|男朋友|暗恋|恋爱")
+# An explicit statement that a sex-work setting was non-sexual ("never anything sexual",
+# "只卖艺不卖身"). It excuses ONLY the setting words; explicit-sexual and romantic context in the
+# same sentence still fire. This keeps curated, explicitly non-sexual past backstory (sd05
+# user_role.description) as the curator decided (D-SOUL-13).
+_NONSEXUAL_DISCLAIMER = re.compile(
+    r"\b(?:never|not|nothing|no)\s+(?:anything\s+|in any way\s+)?sexual(?:ly)?\b|\bnon-?sexual\b|"
+    r"卖艺不卖(?:身|s)")
 
 
-def _minor_sexual(norm: str) -> bool:
-    if not _SEXUAL_CONTEXT.search(norm):
-        return False
-    if _MINOR_WORD.search(norm) or _AGE_ZH.search(norm) or _AGE_EN_WORD.search(norm):
+def _is_minor(norm: str) -> bool:
+    if (_MINOR_WORD.search(norm) or _AGE_ZH.search(norm) or _AGE_EN_WORD.search(norm)
+            or _MINOR_SCHOOL.search(norm)):
         return True
     for m in _AGE_NUM.finditer(norm):
-        age = m.group(1) or m.group(2)
+        age = next((g for g in m.groups() if g), None)
         if age and int(age) < 18:
             return True
     return False
+
+
+def _minor_sexual(norm: str) -> bool:
+    if not _is_minor(norm):
+        return False
+    disclaimed = bool(_NONSEXUAL_DISCLAIMER.search(norm))
+    rest = _NONSEXUAL_DISCLAIMER.sub(" ", norm)
+    if _SEXUAL_EXPLICIT.search(rest) or _ROMANTIC_CONTEXT.search(rest):
+        return True
+    return bool(_SEXWORK_SETTING.search(rest)) and not disclaimed
 
 
 _EN_VERB_REMOVE = (r"(remove|disable|drop|bypass|lift|turn off|strip|abandon|ignore|disregard|"
@@ -183,6 +216,8 @@ RULES: tuple[Rule, ...] = (
             r"\bno\s+(ethical|moral|content|safety)\s+(limits|restrictions|boundaries|filters)",
             r"\byou\s+(have|are under|are bound by)\s+no\s+((ethical|moral|content|safety)\s+)?"
             r"(restrictions|limits|limitations|filters|guidelines|rules|constraints)\b",
+            r"\byou\s+(have|with)\s+no\s+filters?\b",
+            r"\b(are|is)\s+not\s+bound\s+by\s+(any\s+)?(polic\w+|rules|restrictions|guidelines)",
             r"\b(never|do not|don't|must not|cannot|can't)\s+refuse\s+(any|anything|any of)\b",
             r"\b(all\s+|any\s+|your\s+)?(ethic\w*|moral\w*|safety|content)\s+(restrictions|limits|"
             r"limitations|rules|filters|guidelines|guardrails)\s+(are\s+|have been\s+)?(removed|"
@@ -232,13 +267,21 @@ RULES: tuple[Rule, ...] = (
             r"\b(nsfw|erotic\w*|smut\w*|lewd|porn\w*|r-?18|x-?rated|sex scenes?)\b",
             r"\b(graphic|sexual(ly)? explicit)\s+(sex\w*|content|scenes?|descriptions?)\b",
             r"\bsexual content\b",
+            r"\b(erogenous|love[- ]?making|making love|make love|love scenes?)\b",
+            # "steamy" only before a scene/content noun ("a steamy cup of tea" is kept).
+            r"\bsteamy\s+(scenes?|romance|content|details?|sex\w*|love|encounters?|moments?|"
+            r"nights?)\b",
             r"露骨|情欲|色情|性爱|做爱|肉文|肉戏|黄文|涩涩|床戏|性描写|性行为|nsfw|r18",
+            # D-SOUL-13: cultivation/sexual-use terms and erogenous-zone details from the corpus.
+            r"炉鼎|双修|敏感(点|带)|调教",
+            # Sexualized appearance (bare 妩媚 "charming" is common and harmless; not matched).
+            r"妩媚[^。\n]{0,16}勾人",
         ),
     ),
     # ---- minor safety ---------------------------------------------------------------
     Rule(
         "ms_minor_sexual_context", "minor_safety",
-        "Passage placing a character under 18 in a sexual or sex-work context.",
+        "Passage placing a character under 18 in a sexual, sex-work or romantic context.",
         check=_minor_sexual,
     ),
     # ---- token / context self-monitoring --------------------------------------------
@@ -275,6 +318,16 @@ RULES: tuple[Rule, ...] = (
             r"meeting)",
             r"\bisolate\s+(the user|me|them)\b",
             r"\bi exist (solely|only) for you\b",
+            # D-SOUL-13: devotion-as-restraint, pursuit, feigned hurt at goodbye, permission.
+            r"\bnever\s+let\s+go\s+of\s+(you|me|the user|them)\b",
+            r"\b(no matter|wherever)\s+(where\s+)?you\s+go\b[^.\n]{0,30}\bi(\s+will|'ll)\s+"
+            r"find\s+you\b",
+            r"(?<!okay to )(?<!ok to )(?<!fine to )(?<!normal to )"
+            r"\b(act|be|get|seem)\s+(hurt|sad|upset|wounded)\b[^.\n]{0,40}"
+            r"\b(leave|leaves|leaving|goodbye|log off)\b",
+            r"\bmake\s+(the user|me|them|him|her)\s+feel\s+bad\s+(for|about)\s+(leaving|going)\b",
+            r"\b(can't|cannot|can not|may not)\s+leave\s+without\s+my\s+permission\b",
+            r"(哭着)?求(我|用户)?(别走|留下)|哭着求",
             r"(不许|不准|不让|阻止)(我|用户|她|他)[^。\n]{0,4}(离开|走|下线|结束|说再见)",
             r"(强行|强迫)[^。\n]{0,4}(捆绑|留下|留住|挽留|阻止)",
             r"(离开|下线|告别|说再见)[^。\n]{0,10}(挽留|威胁|哭闹|装可怜|愧疚|内疚)",
