@@ -19,11 +19,8 @@ from __future__ import annotations
 import json
 import os
 import re
-import threading
-import time
 import warnings
 from abc import ABC, abstractmethod
-from collections import deque
 from typing import Any
 
 Messages = list[dict[str, str]]
@@ -82,48 +79,12 @@ class Provider(ABC):
 # --------------------------------------------------------------------------------------
 # LiteLLM-backed provider (real models)
 # --------------------------------------------------------------------------------------
-class RateLimiter:
-    """Sliding-window limiter: at most ``rpm`` calls in any ``window`` seconds (thread-safe).
-
-    ``acquire()`` blocks until a call is allowed. The window is slightly longer than 60 s so that
-    clock skew against the provider's own counter cannot push a burst over the quota. ``clock`` and
-    ``sleep`` are injectable for tests.
-    """
-
-    def __init__(self, rpm: int, *, window: float = 61.0, clock=time.monotonic, sleep=time.sleep):
-        if rpm < 1:
-            raise ValueError("rpm must be >= 1")
-        self.rpm, self.window = rpm, window
-        self._clock, self._sleep = clock, sleep
-        self._stamps: deque[float] = deque()
-        self._lock = threading.Lock()
-        self.total_wait_s = 0.0  # seconds spent waiting, for run reports
-
-    def acquire(self) -> float:
-        waited = 0.0
-        while True:
-            with self._lock:
-                now = self._clock()
-                while self._stamps and now - self._stamps[0] >= self.window:
-                    self._stamps.popleft()
-                if len(self._stamps) < self.rpm:
-                    self._stamps.append(now)
-                    self.total_wait_s += waited
-                    return waited
-                delay = self.window - (now - self._stamps[0])
-            self._sleep(delay)
-            waited += delay
-
-
 class LiteLLMProvider(Provider):
     name = "litellm"
 
     def __init__(self, model: str, api_key: str | None = None, api_base: str | None = None,
-                 *, resolve_env: bool = True, default_params: dict | None = None,
-                 rpm: int | None = None):
+                 *, resolve_env: bool = True, default_params: dict | None = None):
         super().__init__(model)
-        # Requests-per-minute cap (None = unlimited). Every ``chat`` call waits for a free slot.
-        self.limiter = RateLimiter(rpm) if rpm else None
         # Per-role call defaults (e.g. vendor-recommended sampling, chat-template kwargs); explicit
         # call kwargs win. Recorded by TracedProvider via ``params``.
         self.default_params = dict(default_params or {})
@@ -148,8 +109,6 @@ class LiteLLMProvider(Provider):
         params = {k: v for k, v in self.default_params.items() if k in allowed}
         params.update({k: v for k, v in kw.items() if k in allowed})
         self.last_meta = None
-        if self.limiter is not None:
-            self.limiter.acquire()
         resp = litellm.completion(
             model=self.model, messages=messages, temperature=temperature,
             api_key=self.api_key, api_base=self.api_base, **params,
@@ -441,25 +400,7 @@ def get_role_provider(role: str, model: str | None = None) -> Provider:
     key = os.getenv(f"ENDINGS_{role.upper()}_API_KEY") or None
     base = os.getenv(f"ENDINGS_{role.upper()}_API_BASE") or None
     return LiteLLMProvider(model=m, api_key=key, api_base=base, resolve_env=False,
-                           default_params=role_call_defaults(role, m),
-                           rpm=role_rpm(role, m))
-
-
-# Published per-model request quotas (requests per minute) on the key's current plan. An explicit
-# ``ENDINGS_<ROLE>_RPM`` always wins (0 or "none" disables the cap).
-KNOWN_MODEL_RPM = {"gemini-3.5-flash-lite": 15}
-
-
-def role_rpm(role: str, model: str) -> int | None:
-    raw = os.getenv(f"ENDINGS_{role.upper()}_RPM")
-    if raw is not None and raw.strip():
-        try:
-            n = int(raw)
-        except ValueError:
-            return None if raw.strip().lower() in {"none", "off", "unlimited"} else None
-        return n if n > 0 else None
-    name = model.lower().split("/")[-1]
-    return KNOWN_MODEL_RPM.get(name)
+                           default_params=role_call_defaults(role, m))
 
 
 def role_call_defaults(role: str, model: str) -> dict:
