@@ -31,6 +31,9 @@ GPU = os.environ.get("ENDINGS_MODAL_GPU", "L40S")
 MAX_MODEL_LEN = int(os.environ.get("ENDINGS_MODAL_MAX_MODEL_LEN", "32768"))
 PORT = 8000
 MINUTES = 60
+# Idle minutes before the container scales to zero. A cold start costs about as much GPU time
+# (4 to 9 minutes), so keeping it warm longer than that only wastes money between runs.
+SCALEDOWN_MIN = int(os.environ.get("ENDINGS_MODAL_SCALEDOWN_MIN", "5"))
 
 vllm_image = (
     modal.Image.from_registry("nvidia/cuda:12.8.1-devel-ubuntu22.04", add_python="3.12")
@@ -48,7 +51,7 @@ app = modal.App("endings-llama31-8b")
 @app.function(
     image=vllm_image,
     gpu=GPU,
-    scaledown_window=10 * MINUTES,  # idle time before scaling to zero (cost control)
+    scaledown_window=SCALEDOWN_MIN * MINUTES,
     timeout=30 * MINUTES,
     volumes={"/root/.cache/huggingface": hf_cache, "/root/.cache/vllm": vllm_cache},
     secrets=[
