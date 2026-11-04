@@ -33,3 +33,7 @@ Figures: `results/pilot_3x3x2/figures/` (MANIFEST.json holds input hashes, scrip
 
 - `table_arm_summary.csv` is unfiltered (control n=9 sessions); pooled figures use the paired subset (D-FIG-6).
 - Input hashes (sha256 prefix): transcripts 2d3a6bea601d1d53, injections 6ee507e777afaf69, ratings 2f5f1871d31760ce.
+
+## Archived data
+Copied (trace gzipped) to `docs/experiments/data/pilot_3x3x2/`, with launch/console logs. The aborted attempt 1 is in
+`docs/experiments/data/pilot_3x3x2_attempt1_aborted/` (not used in any analysis; see D-1).

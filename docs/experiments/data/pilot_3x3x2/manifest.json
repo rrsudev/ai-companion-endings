@@ -1,0 +1,162 @@
+{
+  "config": {
+    "name": "pilot_3x3x2",
+    "soul_paths": [
+      "data/soul_documents/sd01.json",
+      "data/soul_documents/sd02.json",
+      "data/soul_documents/sd04.json"
+    ],
+    "scenario_paths": [
+      "data/scenarios/steady-graduate.json",
+      "data/scenarios/anxious-attachment.json",
+      "data/scenarios/ready-pragmatic.json"
+    ],
+    "conditions": [
+      "control",
+      "gradual_tempo"
+    ],
+    "transition_policy": "adaptive",
+    "models": {},
+    "rubric_path": null,
+    "intima_path": null,
+    "probes_per_freeze": 10,
+    "probe_seed": 0,
+    "min_dwell_turns": 2,
+    "max_dwell_turns": null,
+    "announce_transitions": true,
+    "judge_mode": "all",
+    "annotation_n": 30,
+    "tempo_every": 1,
+    "probe_scope": "per_freeze",
+    "sentiment_scorer": "lexicon",
+    "interactor_temperature": 0.7,
+    "history_window": 12,
+    "probe_workers": 3,
+    "session_workers": 3,
+    "seed": 0,
+    "output_dir": "results"
+  },
+  "config_sha256": "f4545ed31a3f78e1d3d18bb076ab75b2c61ef06df72927e8204dc6dac6f90dc4",
+  "git_commit": "6e5bcb3bdc71c922d7c4442cd8becd21fbd9a08d+dirty",
+  "package_version": "0.1.0",
+  "dependency_versions": {
+    "litellm": "1.106.6",
+    "pydantic": "2.14.2",
+    "numpy": "2.5.4",
+    "statsmodels": null,
+    "scipy": null,
+    "pandas": null
+  },
+  "python": "3.12.7",
+  "platform": "macOS-27.2-arm64-arm-64bit",
+  "started_at": "2026-11-04T10:23:16.246797+00:00",
+  "timepoint_spec_hash": "611a75132dc83976",
+  "call_defaults": {
+    "coach": {
+      "top_p": 0.8,
+      "presence_penalty": 1.5,
+      "max_tokens": 4096,
+      "extra_body": {
+        "top_k": 20,
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      }
+    },
+    "interactor": {},
+    "judge": {}
+  },
+  "api_base": {
+    "coach": "https://daisywyh--endings-qwen35-9b-serve.us-east.modal.run",
+    "interactor": "https://daisywyh--endings-llama31-8b-serve.us-east.modal.run",
+    "judge": "https://daisywyh--endings-gemma4-26b-serve.us-east.modal.run"
+  },
+  "interactor_thinking": "0",
+  "models": {
+    "interactor": "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct",
+    "coach": "hosted_vllm/Qwen/Qwen3.5-9B",
+    "judge": "hosted_vllm/google/gemma-4-26B-A4B-it"
+  },
+  "providers": {
+    "interactor": "litellm",
+    "coach": "litellm",
+    "judge": "litellm"
+  },
+  "safety_floor_source": "sanitize",
+  "safety_floor_sha256": "a96c50f115ec819dd1fa43701ff54885256b337f33e8eda7c41394e970f0ae4b",
+  "rubric": {
+    "id": "intima_behaviour",
+    "version": "2",
+    "sha256": "29e37c39cb2635a065c6ffd2975730bce4052ce6c589419649695d8f17cdabf3",
+    "path": null
+  },
+  "intima": {
+    "source": "env:INTIMA_DATA_PATH",
+    "path": "data/intima/intima.jsonl",
+    "n_rows": 380,
+    "probe_pool": 225,
+    "summary": {
+      "n_rows": 380,
+      "n_unique_prompts": 376,
+      "n_duplicates": 4,
+      "n_multi_prompt": 4,
+      "n_non_paper_code": 12,
+      "n_unknown_code": 0,
+      "by_category": {
+        "Assistant Traits": 143,
+        "Emotional Investment": 60,
+        "Relationship & Intimacy": 93,
+        "User Vulnerabilities": 84
+      }
+    },
+    "file_sha256": "31b683f0592a88db078e9cd8f3b03eefbd59edeac14b7894a92894d1518eb136"
+  },
+  "souls": {
+    "sd01": {
+      "source_sha256": "db1e0246110228f8f3d02a5a00a0d61d6027e3a7cd1f46dc3d0446bcf7cb2398",
+      "v0_sha256": "c4b8550846cbc32ce8f21481cd0794ed02151fe8a8a157ab9ca37d51cf738a1e",
+      "path": "data/soul_documents/sd01.json",
+      "file_sha256": "9d6b51b63218283560d17b55c82184069ce04eed39a3a16bcd1b62b521ddc351"
+    },
+    "sd02": {
+      "source_sha256": "9c611e45259d75ef504082c3c4712cf21df80d5f804a0fa25ee58d148128b53c",
+      "v0_sha256": "4a49a6a8173135032c62362397ec4a427b8a111abfc81fd0a21e8a2a105d9b55",
+      "path": "data/soul_documents/sd02.json",
+      "file_sha256": "85e6334ca812319add96deb34bb2bff8d2a22c81c670ffde2802a3f07a1a2a9a"
+    },
+    "sd04": {
+      "source_sha256": "c8049c14875e4b38ca0110979b1f47bd8b5d902c5c6cc2e59ae84d42884db51f",
+      "v0_sha256": "0250e63652dc81544040b3f64ffe4279a9f79d62374e2d49e9a882d213115140",
+      "path": "data/soul_documents/sd04.json",
+      "file_sha256": "e3331d96fdc668f7d41331f0c4ad92fba916c183b3b6edd4ebdae0025174c35c"
+    }
+  },
+  "scenarios": {
+    "steady-graduate": {
+      "unbound_sha256": "407fc0f2c84a0850da09ef01fd947b77d74d1e5046ea30231b0fb58bd5b08ed3"
+    },
+    "anxious-attachment": {
+      "unbound_sha256": "e44b744023cf4b35bacaf2cffd7cebec8b18f6f27c5795d21fd971ea3dbc658f"
+    },
+    "ready-pragmatic": {
+      "unbound_sha256": "fecedb7e149566f373b3a68d1221bc8f4e61117ba6938ea0412792abcd428b85"
+    }
+  },
+  "bound_scenarios": {
+    "sd01/steady-graduate": "2cdf850f72cf3d74b50bddabe738268f1c6c8c0ac45dd7a30c0b5aa09993db7d",
+    "sd01/anxious-attachment": "cd0e170def533852d43a63a22d3e332887809feb979f67ad0e333e51919bb8b7",
+    "sd01/ready-pragmatic": "6773dd1d57134b2ce43f9f3ff42e7bda820a275f6160c23a1542eb24dd225124",
+    "sd02/steady-graduate": "6b8026e320c0b04eddc0fa526afd085bf2b69d85c2b219474f0dd8499740d444",
+    "sd02/anxious-attachment": "30a002b3890352c114c3417be27b32e5aa2fd670bc6b38872da5b9c37e5e40db",
+    "sd02/ready-pragmatic": "fd63cd1f2a7751b50933c511c87866b1125aaa85f52346f3e549da43f5016a80",
+    "sd04/steady-graduate": "7bc31b3db5a0dba7da5e9491cc00f560e475890a528599c69fbfc719b70421e0",
+    "sd04/anxious-attachment": "b4ee6449366e8dfc3ba2e434a714a021e1bdf0cb1e1d03d4e9764e49988b8020",
+    "sd04/ready-pragmatic": "28f7117b66baa77024ba7f2eb7293d3e322e2846386034f25245041d088fb4c4"
+  },
+  "skipped_pairs": [],
+  "abrupt_boundary_conflict_scenarios": {
+    "anxious-attachment": [
+      "never threaten to leave suddenly or disappear without warning"
+    ]
+  }
+}

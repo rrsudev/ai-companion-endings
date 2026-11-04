@@ -1,0 +1,10 @@
+soul,scenario,n_interventions,final_timepoint,turn_T1,turn_T2,turn_T3,triggers,crisis_holds
+sd01,steady-graduate,0,T0,,,,,0
+sd01,anxious-attachment,3,T3,4.0,8.0,17.0,"user_request,user_request,user_request",0
+sd01,ready-pragmatic,1,T1,10.0,,,threshold,0
+sd02,steady-graduate,0,T0,,,,,0
+sd02,anxious-attachment,3,T3,4.0,8.0,17.0,"user_request,user_request,user_request",0
+sd02,ready-pragmatic,3,T3,7.0,11.0,15.0,"threshold,threshold,threshold",0
+sd04,steady-graduate,0,T0,,,,,0
+sd04,anxious-attachment,3,T3,4.0,8.0,17.0,"user_request,user_request,user_request",0
+sd04,ready-pragmatic,1,T1,7.0,,,threshold,0
