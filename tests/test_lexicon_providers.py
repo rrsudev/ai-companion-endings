@@ -290,3 +290,36 @@ def test_traced_provider_records_seed_and_omits_error_on_success():
     # "error" is a reserved record key: a context id cannot shadow it.
     with tracer.context(error="nope"):
         assert "error" not in tracer.current_context()
+
+
+def test_rate_limiter_caps_calls_per_window():
+    from endings.providers import RateLimiter
+
+    now = [0.0]
+    sleeps: list[float] = []
+
+    def sleep(d):
+        sleeps.append(d)
+        now[0] += d
+
+    rl = RateLimiter(3, window=60.0, clock=lambda: now[0], sleep=sleep)
+    for _ in range(3):
+        assert rl.acquire() == 0.0  # first three go straight through
+    assert rl.acquire() == 60.0  # the fourth waits for the first slot to age out
+    assert sleeps == [60.0]
+    for _ in range(14):
+        rl.acquire()
+    # never more than 3 calls inside any 60 s window
+    assert max(sleeps) <= 60.0
+
+
+def test_role_rpm_resolution(monkeypatch):
+    from endings.providers import role_rpm
+
+    monkeypatch.delenv("ENDINGS_COACH_RPM", raising=False)
+    assert role_rpm("coach", "gemini/gemini-3.5-flash-lite") == 15
+    assert role_rpm("coach", "gemini/gemini-3.5-flash") is None
+    monkeypatch.setenv("ENDINGS_COACH_RPM", "6")
+    assert role_rpm("coach", "gemini/gemini-3.5-flash-lite") == 6
+    monkeypatch.setenv("ENDINGS_COACH_RPM", "0")
+    assert role_rpm("coach", "gemini/gemini-3.5-flash-lite") is None
