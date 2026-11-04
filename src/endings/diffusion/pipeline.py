@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -821,12 +822,28 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
         tr_path, inj_path = rd / "transcripts.jsonl", rd / "injections.jsonl"
         for p in (tr_path, inj_path):  # truncated now, appended per finished session
             p.write_text("", encoding="utf-8")
-        for soul, sc in pairs:
-            for cond in config.conditions:
+        jobs = [(soul, sc, cond) for soul, sc in pairs for cond in config.conditions]
+
+        def _run_one(job):
+            """Run one session. An exception is returned, not raised, so the consumer below keeps
+            its fail-soft handling (D-PIPE-19) whether sessions run in threads or not."""
+            soul, sc, cond = job
+            try:
+                return run_session(soul=soul, scenario=sc, condition=cond, config=config,
+                                   providers=provs, tracer=tracer, intima_probes=pool)
+            except Exception as e:  # noqa: BLE001
+                return e
+
+        n_workers = min(config.session_workers, len(jobs)) if jobs else 1
+        pool_ex = ThreadPoolExecutor(max_workers=n_workers) if n_workers > 1 else None
+        # Results are consumed in job order, so outputs do not depend on the worker count.
+        outcomes = pool_ex.map(_run_one, jobs) if pool_ex else map(_run_one, jobs)
+        try:
+            for (soul, sc, cond), outcome in zip(jobs, outcomes):
                 try:
-                    tr, inj = run_session(soul=soul, scenario=sc, condition=cond,
-                                          config=config, providers=provs, tracer=tracer,
-                                          intima_probes=pool)
+                    if isinstance(outcome, BaseException):
+                        raise outcome
+                    tr, inj = outcome
                     turns = annotate_sentiment(tr.turns, scorer)  # sets sentiment_source
                 except Exception as e:  # noqa: BLE001 - fail-soft per session (D-PIPE-19)
                     first_error = first_error or e
@@ -853,6 +870,9 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
                 with inj_path.open("a", encoding="utf-8") as fh:
                     for r in inj:
                         fh.write(r.model_dump_json() + "\n")
+        finally:
+            if pool_ex:
+                pool_ex.shutdown(wait=True)
         if failed and not transcripts and first_error is not None:
             raise first_error
 

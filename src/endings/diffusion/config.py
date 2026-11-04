@@ -59,5 +59,11 @@ class DiffusionConfig(Strict):
     sentiment_scorer: Literal["lexicon", "llm"] = "lexicon"  # ITS DV; llm = robustness check
     interactor_temperature: float = 0.7
     history_window: int = 12  # interactor sees the last N turns
+    # Concurrency (GPU servers batch concurrent requests, so this cuts billed GPU time). Both default
+    # to 1 = fully sequential. Results are identical; only the order of trace ``seq`` numbers (and
+    # so ``llm_call_seqs``) changes. Total in-flight requests are about session_workers x
+    # probe_workers per server, so keep the product at or below the server's max_inputs (32).
+    probe_workers: int = Field(1, ge=1)  # probes of one freeze point run concurrently
+    session_workers: int = Field(1, ge=1)  # (soul, scenario, arm) sessions run concurrently
     seed: int = 0
     output_dir: str = "results"

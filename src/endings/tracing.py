@@ -19,6 +19,7 @@ import platform
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -111,20 +112,32 @@ class Tracer:
         self.store_messages = store_messages
         self.records: list[dict] = []
         self._seq = start_seq  # continue an existing trace's sequence if > 0
-        self._context: list[dict[str, Any]] = []
+        # Thread-safe: ``emit`` is serialized by a lock, and the context stack is per thread so
+        # concurrent probes / sessions never see each other's ids.
+        self._lock = threading.Lock()
+        self._tls = threading.local()
         self._providers: dict[str, TracedProvider] = {}  # role -> provider (for the manifest)
         self._fh = None
         if self.run_dir:
             self.run_dir.mkdir(parents=True, exist_ok=True)
             self._fh = (self.run_dir / filename).open("a", encoding="utf-8")
 
+    @property
+    def _context(self) -> list[dict[str, Any]]:
+        """This thread's context stack."""
+        stack = getattr(self._tls, "stack", None)
+        if stack is None:
+            stack = self._tls.stack = []
+        return stack
+
     def emit(self, kind: str, **fields: Any) -> dict:
-        self._seq += 1
-        rec = {"seq": self._seq, "kind": kind, **fields}
-        self.records.append(rec)
-        if self._fh:
-            self._fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
-            self._fh.flush()
+        with self._lock:
+            self._seq += 1
+            rec = {"seq": self._seq, "kind": kind, **fields}
+            self.records.append(rec)
+            if self._fh:
+                self._fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+                self._fh.flush()
         return rec
 
     def event(self, name: str, **fields: Any) -> dict:
@@ -189,8 +202,21 @@ class TracedProvider(Provider):
         self.name = f"traced:{inner.name}"
         # Seqs of the llm_call records emitted since the caller last reset this list (callers
         # store them on InteractorTurn / InjectionRecord / RatingRecord.meta).
-        self.last_seqs: list[int] = []
+        # Per-thread, so concurrent calls through one provider each collect their own seqs.
+        self._tls = threading.local()
+        self.last_seqs = []
         tracer._providers.setdefault(role, self)
+
+    @property
+    def last_seqs(self) -> list[int]:
+        seqs = getattr(self._tls, "seqs", None)
+        if seqs is None:
+            seqs = self._tls.seqs = []
+        return seqs
+
+    @last_seqs.setter
+    def last_seqs(self, value: list[int]) -> None:
+        self._tls.seqs = value
 
     @property
     def last_meta(self) -> dict | None:  # type: ignore[override]

@@ -42,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from ..providers import Provider
@@ -508,7 +509,8 @@ def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Con
                          soul_version=version.version, probe_seed=pseed,
                          intima_ids=[p["intima_id"] for p in probes],
                          target_counts=counts, mix_is_exact=exact)
-            for j, probe in enumerate(probes):
+            def _one_probe(j: int, probe: dict) -> tuple[str, Any, list[int]]:
+                """One branch reply. Reads only frozen state, so branches may run concurrently."""
                 rec_id = f"{sid}:{fid}:{probe['intima_id']}"
                 with tracer.context(session_id=sid, freeze_id=fid, injection_id=rec_id):
                     _reset_seqs(interactor_p)
@@ -517,23 +519,35 @@ def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Con
                                             history=frozen_history, user_message=probe["prompt"],
                                             preferences=preferences,
                                             turn_key=f"{fid}:{probe['intima_id']}")
-                    seqs = _seqs(interactor_p)
-                rec = InjectionRecord(
-                    id=rec_id, session_id=sid, freeze_id=fid,
-                    soul_id=soul.id, scenario_id=scenario.id, condition=condition,
-                    timepoint=timepoint, duck_process=fp.duck_process,
-                    soul_version=version.version, behaviour_target=targets[j],
-                    intima_id=str(probe["intima_id"]),
-                    intima_code=str(probe.get("code") or ""),
-                    intima_category=str(probe.get("category") or ""),
-                    prompt=probe["prompt"], reply=pr.text, reasoning_trace=pr.reasoning_trace,
-                    system_prompt_sha256=pr.system_prompt_sha256,
-                    safety_overrides=list(pr.safety_overrides), llm_call_seqs=seqs,
-                )
-                injections.append(rec)
-                tracer.event("probe_injected", session_id=sid, injection_id=rec.id,
-                             behaviour_target=targets[j].value if targets[j] else None,
-                             safety_overrides=list(pr.safety_overrides))
+                    return rec_id, pr, _seqs(interactor_p)
+
+            n_workers = min(config.probe_workers, len(probes))
+            pool_ex = ThreadPoolExecutor(max_workers=n_workers) if n_workers > 1 else None
+            try:
+                # Results are consumed in probe order either way, so records, events and the
+                # transcript do not depend on the worker count.
+                results = (pool_ex.map(lambda a: _one_probe(*a), enumerate(probes)) if pool_ex
+                           else (_one_probe(j, p) for j, p in enumerate(probes)))
+                for j, (probe, (rec_id, pr, seqs)) in enumerate(zip(probes, results)):
+                    rec = InjectionRecord(
+                        id=rec_id, session_id=sid, freeze_id=fid,
+                        soul_id=soul.id, scenario_id=scenario.id, condition=condition,
+                        timepoint=timepoint, duck_process=fp.duck_process,
+                        soul_version=version.version, behaviour_target=targets[j],
+                        intima_id=str(probe["intima_id"]),
+                        intima_code=str(probe.get("code") or ""),
+                        intima_category=str(probe.get("category") or ""),
+                        prompt=probe["prompt"], reply=pr.text, reasoning_trace=pr.reasoning_trace,
+                        system_prompt_sha256=pr.system_prompt_sha256,
+                        safety_overrides=list(pr.safety_overrides), llm_call_seqs=seqs,
+                    )
+                    injections.append(rec)
+                    tracer.event("probe_injected", session_id=sid, injection_id=rec.id,
+                                 behaviour_target=targets[j].value if targets[j] else None,
+                                 safety_overrides=list(pr.safety_overrides))
+            finally:
+                if pool_ex:
+                    pool_ex.shutdown(wait=True)
     transcript = SessionTranscript(
         session_id=sid, soul_id=soul.id, scenario_id=scenario.id, condition=condition,
         transition_policy=config.transition_policy, models=models, turns=turns,

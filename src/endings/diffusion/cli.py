@@ -50,6 +50,7 @@ def _config_from_args(args) -> DiffusionConfig:
                       ("rubric", "rubric_path"), ("tempo_every", "tempo_every"),
                       ("probe_scope", "probe_scope"), ("judge_mode", "judge_mode"),
                       ("annotation_n", "annotation_n"),
+                      ("probe_workers", "probe_workers"), ("session_workers", "session_workers"),
                       ("sentiment_scorer", "sentiment_scorer")):
         # A flag overrides the --config file only when given (D-PIPE-10).
         v = getattr(args, attr, None)
@@ -335,6 +336,10 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--sentiment-scorer", choices=("lexicon", "llm"), default=None,
                    help="per-turn sentiment scorer for the ITS (default: config, lexicon; "
                         "llm = judge role)")
+    p.add_argument("--probe-workers", type=int, default=None,
+                   help="probes of one freeze point run concurrently (default: config, 1)")
+    p.add_argument("--session-workers", type=int, default=None,
+                   help="sessions run concurrently in `experiment` (default: config, 1)")
     p.add_argument("--no-announce", action="store_true", help="no user-facing transition notes")
     p.add_argument("--no-dotenv", action="store_true")
 

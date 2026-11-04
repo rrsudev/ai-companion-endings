@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import warnings
 from abc import ABC, abstractmethod
 from typing import Any
@@ -85,6 +86,7 @@ class LiteLLMProvider(Provider):
     def __init__(self, model: str, api_key: str | None = None, api_base: str | None = None,
                  *, resolve_env: bool = True, default_params: dict | None = None):
         super().__init__(model)
+        self._tls = threading.local()  # last_meta is per thread (concurrent calls)
         # Per-role call defaults (e.g. vendor-recommended sampling, chat-template kwargs); explicit
         # call kwargs win. Recorded by TracedProvider via ``params``.
         self.default_params = dict(default_params or {})
@@ -93,6 +95,14 @@ class LiteLLMProvider(Provider):
         # falls back to its own provider-native env vars (GEMINI_API_KEY, ...).
         self.api_key = resolve_api_key(api_key) if resolve_env else api_key
         self.api_base = resolve_api_base(api_base) if resolve_env else api_base
+
+    @property
+    def last_meta(self) -> dict | None:  # type: ignore[override]
+        return getattr(self._tls, "meta", None)
+
+    @last_meta.setter
+    def last_meta(self, value: dict | None) -> None:
+        self._tls.meta = value
 
     def chat(self, messages, *, temperature=0.7, task=None, hints=None, **kw):
         try:
