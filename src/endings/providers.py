@@ -426,7 +426,11 @@ def role_call_defaults(role: str, model: str) -> dict:
     if thinking:
         return {"top_p": 0.95, "presence_penalty": 1.5, "max_tokens": 8192,
                 "extra_body": {"top_k": 20, "chat_template_kwargs": {"enable_thinking": True}}}
-    return {"top_p": 0.8, "presence_penalty": 1.5, "max_tokens": 1024,
+    # Companion replies are short, but the coach's structured JSON (strivings, plans) is not: at
+    # 1024 tokens the Tempo inference was cut off (finish_reason "length") and failed to parse in
+    # 24 of 26 calls in the first pilot attempt. Non-interactor roles get a larger budget.
+    max_tokens = 1024 if role == "interactor" else 4096
+    return {"top_p": 0.8, "presence_penalty": 1.5, "max_tokens": max_tokens,
             "extra_body": {"top_k": 20, "chat_template_kwargs": {"enable_thinking": False}}}
 
 

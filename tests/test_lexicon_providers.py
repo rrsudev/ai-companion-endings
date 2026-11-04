@@ -290,3 +290,11 @@ def test_traced_provider_records_seed_and_omits_error_on_success():
     # "error" is a reserved record key: a context id cannot shadow it.
     with tracer.context(error="nope"):
         assert "error" not in tracer.current_context()
+
+
+def test_qwen_coach_gets_a_larger_token_budget_than_the_interactor():
+    from endings.providers import role_call_defaults
+
+    m = "hosted_vllm/Qwen/Qwen3.5-9B"
+    assert role_call_defaults("interactor", m)["max_tokens"] == 1024
+    assert role_call_defaults("coach", m)["max_tokens"] == 4096
