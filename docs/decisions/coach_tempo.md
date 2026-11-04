@@ -432,3 +432,24 @@ across later inference passes.
 `infer_strivings` at the first turn of each phase, and scenario data are owned by other areas and
 requested there; until they land, R11's "users may edit inferred goals" is exercised only in unit
 tests.
+
+## Amendments: cross-area requests (2026-11-03, second pass)
+
+## D-TEMPO-18: Per-call seed forwarding for `tempo_infer` / `tempo_assess`
+
+**Decision.** `TempoCoachModel(..., seed=None)` takes the run seed (`DiffusionConfig.seed`).
+`infer_strivings` and `assess` take an optional `call_key` (e.g. `"turn:7"`). When the run seed is
+set, each call sends `seed = call_seed(<task>, seed, call_key, attempt=0)` (`coach.seeding`, the
+same derivation as `session.stable_seed`, `% 2**31`). The task name is the role label, so infer and
+assess at the same turn get different seeds. When `call_key` is omitted it defaults to
+`t<len(turns)>:o<len(observations)>`, a position key that is the same in every arm and replicate of a
+scripted scenario. With no run seed, no `seed` kwarg is sent.
+
+**Rationale.** Makes seed replicates real replicates on backends that honour `seed` (review,
+[medium/trace]). The key is positional rather than content-hashed: content differs across arms
+because the interactor replies differ, and a content key would unpair the arms.
+
+**Consequences.** Best effort only: Gemini via litellm may ignore `seed`, and `MockProvider` ignores
+it (mock output unchanged, tested). Single attempt, so `attempt` is 0. This takes effect only once
+`session.py` passes `seed=config.seed` to `TempoCoachModel` (and optionally `call_key=f"turn:{i}"`).
+That request is in docs/design/session_notes_pending.md.

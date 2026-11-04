@@ -33,8 +33,10 @@ requirement to its implementation, tests and documented decisions.
 - **R8 Coach output.** A pipeline translating scaffolded user intent, inferred with Tempo, into
   in-character, user-aligned stages; the coach gives pointers to the next strategic step to slowly
   decrease emotional investment and provide an incremental, natural ending.
+  *Status: implemented; not yet validated live — the 2026-11-03 live run mocked the coach; see OQ-DEPLOY-4.*
 - **R9 Tempo.** Use the striving co-creation / Tempo framework (Sapkota et al., "What Are You Really
   Trying to Do?": Co-Creating Life Goals from Everyday Computer Use, arXiv 2605.00497).
+  *Status: implemented; not yet validated live — the 2026-11-03 live run mocked the coach; see OQ-DEPLOY-4.*
 - **R10 Coach interventions.** At given timepoints the coach intervenes in the interactor model,
   provides feedback and updates based on user intent, and edits the soul document/context to give
   healthy next steps for disengagement.
@@ -54,6 +56,7 @@ requirement to its implementation, tests and documented decisions.
 - **R14 HAPA.** Use the Health Action Process Approach as another source of intervention structure:
   forming an intention, translating it into action, maintaining change, recovering after setbacks.
 - **R15 Coach model.** A larger API model: Gemini 3.8 Flash (key to be provided).
+  *Status: implemented; not yet validated live — the 2026-11-03 live run mocked the coach; see OQ-DEPLOY-4.*
 
 ## Evaluation
 

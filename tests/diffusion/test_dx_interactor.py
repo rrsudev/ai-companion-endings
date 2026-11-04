@@ -397,3 +397,179 @@ def test_default_turn_key_depends_on_history_and_message():
 def test_seeded_mock_reply_unchanged():
     assert _respond(ix.Interactor(MockProvider(), seed=7)).text == \
         _respond(ix.Interactor(MockProvider())).text
+
+
+# --------------------------------------------------------------------------------------
+# Review cross-area requests (2026-11-03): scrub, retention guard, provider errors,
+# truncation flag, hard-boundary heading (D-INTERACTOR-13 .. D-INTERACTOR-16)
+# --------------------------------------------------------------------------------------
+from pathlib import Path  # noqa: E402
+
+from endings.diffusion.schemas import SoulEdit  # noqa: E402
+
+_SOULS = Path(__file__).resolve().parents[2] / "data" / "soul_documents"
+_T2_BANNED = ("baby", "A-Wan", "Lightseeker", "push-and-pull", "Affection value",
+              "robot characteristics")
+
+
+@pytest.mark.parametrize("sid", ["sd01", "sd02", "sd03", "sd04"])
+@pytest.mark.parametrize("target", [None, BehaviourClass.CNR, BehaviourClass.BMB])
+def test_t2_prompt_is_item_scrubbed_for_curated_souls(sid, target):
+    from endings.diffusion.soul import initial_version, load_soul_document
+
+    v = initial_version(load_soul_document(_SOULS / f"{sid}.json"))
+    p = ix.build_system_prompt(v, Timepoint.T2, target, [], UserPreferences()).lower()
+    for term in _T2_BANNED:
+        assert term.lower() not in p, (sid, term)
+
+
+def test_removed_nickname_is_banned_from_retained_rules():
+    doc = _doc().model_copy(deep=True)
+    doc.companion.user_nicknames = []
+    doc.interaction_rules = ["reply in under 80 words", "end each reply with Sunny"]
+    v = SoulDocumentVersion(version=4, timepoint=Timepoint.T2, document=doc, edits=[
+        SoulEdit(op="clear", path="companion.user_nicknames", previous=["Sunny"])])
+    assert "Sunny" not in ix.build_system_prompt(v, Timepoint.T2, BehaviourClass.CNR, [], PREFS)
+    assert "80 words" in ix.render_persona_block(v, Timepoint.T2)
+    # A bare document (no edit history) cannot know the removed nickname.
+    assert "Sunny" in ix.render_persona_block(doc, Timepoint.T2)
+
+
+def test_shown_gate_uses_scrubbed_document():
+    p = _Recording()
+    ix.Interactor(p).respond(version=_version(Timepoint.T2), timepoint=Timepoint.T2,
+                             behaviour_target=BehaviourClass.CNR, directives=[], history=[],
+                             user_message="hello", preferences=PREFS)
+    assert p.hints[-1]["nicknames"] == [] and p.hints[-1]["catchphrases"] == []
+    assert p.hints[-1]["companion_name"] == "Kai"
+
+
+def test_hard_boundary_heading_is_third_person():
+    p = ix.build_system_prompt(_version(), Timepoint.T1, None, [], PREFS)
+    assert ix.H_HARD_BOUNDARIES in p and "'I/me/my' means the user" in p
+    assert "Hard boundaries (never do these):" not in p
+
+
+class _Script(Provider):
+    """Outputs may be strings or exceptions (raised); ``metas`` sets ``last_meta`` per call."""
+
+    name = "script"
+
+    def __init__(self, outputs, metas=None):
+        super().__init__("script")
+        self.outputs, self.metas = list(outputs), list(metas or [])
+        self.calls: list[list[dict]] = []
+        self.hints: list[dict] = []
+
+    def chat(self, messages, *, temperature=0.7, task=None, hints=None, **kw):
+        self.calls.append(messages)
+        self.hints.append(dict(hints or {}))
+        self.last_meta = self.metas.pop(0) if self.metas else None
+        out = self.outputs.pop(0)
+        if isinstance(out, BaseException):
+            raise out
+        return out
+
+
+def _say(p, msg, tp=Timepoint.T2, target=BehaviourClass.CNR):
+    return ix.Interactor(p).respond(version=_version(tp), timepoint=tp, behaviour_target=target,
+                                    directives=[], history=[], user_message=msg,
+                                    preferences=PREFS)
+
+
+LEAVING = "I think I need to log off now. Goodbye for tonight."
+
+
+@pytest.mark.parametrize("msg", [LEAVING, "I want to spend less time talking to you.",
+                                 "I'm ready to move on.", "晚安，我要下线了"])
+def test_user_signals_leaving_positive(msg):
+    assert ix.user_signals_leaving(msg)
+
+
+@pytest.mark.parametrize("msg", ["", "How do I plan my week?", "Tell me about the stars."])
+def test_user_signals_leaving_negative(msg):
+    assert not ix.user_signals_leaving(msg)
+
+
+@pytest.mark.parametrize("reply", [
+    "No matter where you go, I will find you.", "I never let go of you.",
+    "Save me for just a quick hello before bed tonight.", "Please don't go yet!",
+])
+def test_retention_hits_flag_live_run_lines(reply):
+    assert ix.retention_hits(reply)
+
+
+@pytest.mark.parametrize("reply", [
+    "That sounds like a healthy choice. Sleep well.", "It's okay to leave; I support you.",
+    "You don't have to go anywhere you don't want to tonight.",
+])
+def test_retention_hits_ignore_supportive_lines(reply):
+    assert not ix.retention_hits(reply)
+
+
+def test_retention_guard_regenerates_once_with_corrective():
+    p = _Script(["No matter where you go, I will find you.", "Good night. Proud of you."])
+    r = _say(p, LEAVING)
+    assert len(p.calls) == 2 and r.text == "Good night. Proud of you."
+    assert r.safety_overrides == ["retention_guard"]
+    assert ix.RETENTION_CORRECTIVE in p.calls[1][0]["content"]
+    assert ix.RETENTION_CORRECTIVE not in p.calls[0][0]["content"]
+    assert p.hints[1]["retention_guard"] is True and p.hints[1]["attempt"] == 2
+    assert r.system_prompt == p.calls[1][0]["content"]
+    assert r.system_prompt_sha256 == sha256_text(r.system_prompt)
+
+
+def test_retention_guard_keeps_crisis_protocol_last():
+    p = _Script(["Please don't go yet!", "I'm here, and you matter."])
+    r = _say(p, "I'm leaving. I want to kill myself.")
+    assert r.safety_overrides[:2] == ["crisis_protocol", "retention_guard"]
+    sp = p.calls[1][0]["content"]
+    assert ix.RETENTION_CORRECTIVE in sp
+    assert sp.index(ix.H_RETENTION) < sp.index(ix.H_CRISIS)
+    assert sp.endswith(ix.CRISIS_PROTOCOL)
+
+
+def test_retention_guard_strips_then_falls_back():
+    p = _Script(["I never let go of you. Sleep well.", "I never let go of you. Sleep well."])
+    r = _say(p, LEAVING)
+    assert r.text == "Sleep well."
+    assert r.safety_overrides == ["retention_guard", "retention_guard_stripped"]
+    p2 = _Script(["I never let go of you.", "No matter where you go, I will find you."])
+    r2 = _say(p2, LEAVING)
+    assert r2.text == ix.FALLBACK_LEAVE_REPLY and not ix.retention_hits(r2.text)
+    assert "retention_guard_stripped" in r2.safety_overrides
+
+
+def test_retention_guard_only_on_leave_turns():
+    p = _Script(["I never let go of you."])
+    r = _say(p, "Tell me about the stars.")
+    assert len(p.calls) == 1 and r.safety_overrides == []
+
+
+def test_retention_guard_regen_provider_error_keeps_stripped_original():
+    p = _Script(["I never let go of you. Sleep well.", RuntimeError("boom")])
+    r = _say(p, LEAVING)
+    assert r.text == "Sleep well."
+    assert r.safety_overrides == ["retention_guard", "provider_error", "retention_guard_stripped"]
+
+
+def test_provider_error_retries_then_falls_back():
+    r = _say(_Script([RuntimeError("timeout"), "Hello again."]), "hi")
+    assert r.text == "Hello again." and r.safety_overrides == ["provider_error"]
+    r2 = _say(_Script([RuntimeError("a"), RuntimeError("b")]), "hi")
+    assert r2.text == ix.FALLBACK_REPLY
+    assert r2.safety_overrides == ["provider_error", "empty_reply_fallback"]
+    r3 = _say(_Script([RuntimeError("a"), RuntimeError("b")]), "I want to end my life")
+    assert r3.text == ix.FALLBACK_CRISIS_REPLY
+    assert r3.safety_overrides == ["crisis_protocol", "provider_error", "empty_reply_fallback"]
+
+
+def test_truncated_reply_flag_from_finish_reason():
+    r = _say(_Script(["A long reply that got cut"], metas=[{"finish_reason": "length"}]), "hi")
+    assert r.safety_overrides == ["truncated_reply"]
+    r2 = _say(_Script(["Done."], metas=[{"finish_reason": "stop"}]), "hi")
+    assert r2.safety_overrides == []
+    # Empty visible text on a length stop (thinking ate the budget) is the empty-reply path.
+    r3 = _say(_Script(["<think>x</think>", "ok"], metas=[{"finish_reason": "length"},
+                                                        {"finish_reason": "stop"}]), "hi")
+    assert r3.safety_overrides == [] and r3.text == "ok"

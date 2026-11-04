@@ -53,6 +53,7 @@ from ..schemas import (
 from ..soul.sanitize import detect_unsafe_directives
 from ..timepoints import ALL_FIELDS, spec
 from .policy import has_crisis
+from .seeding import seed_kwargs
 
 TASK = "coach_plan"
 
@@ -606,10 +607,14 @@ class CoachPlanner:
     """Builds the ``CoachIntervention`` for one timepoint transition."""
 
     def __init__(self, provider: Provider, *, use_llm: bool = True,
-                 announce_transitions: bool = True):
+                 announce_transitions: bool = True, seed: int | None = None):
         self.provider = provider
         self.use_llm = use_llm
         self.announce_transitions = announce_transitions
+        # Run-level seed (``DiffusionConfig.seed``); each coach_plan call then carries
+        # ``seed=call_seed("coach_plan", seed, intervention_id, attempt)``. Best-effort on real
+        # backends, ignored by mocks (D-PLANNER-16).
+        self.seed = seed
 
     def plan(self, *, version: SoulDocumentVersion, from_timepoint: Timepoint,
              to_timepoint: Timepoint, trigger: str, turn_index: int,
@@ -633,7 +638,8 @@ class CoachPlanner:
         if has_crisis(assessment):
             notes.append("crisis flag: coach proposals skipped (no additional persona edits)")
         elif self.use_llm:
-            raw = self._call(version=version, from_timepoint=from_timepoint,
+            raw = self._call(call_key=intervention_id, version=version,
+                             from_timepoint=from_timepoint,
                              to_timepoint=to_timepoint, scheduled=scheduled,
                              assessment=assessment, strivings=eligible,
                              preferences=preferences, notes=notes)
@@ -675,10 +681,12 @@ class CoachPlanner:
         )
 
     # -- internals ---------------------------------------------------------------------
-    def _call(self, *, notes: list[str], **kw: Any) -> dict:
+    def _call(self, *, notes: list[str], call_key: str, **kw: Any) -> dict:
         messages, hints = build_messages(**kw)
+        extra = seed_kwargs(TASK, self.seed, call_key, 0)  # single attempt (no retry loop)
         try:
-            out = self.provider.complete_json(messages, task=TASK, hints=hints, temperature=0.2)
+            out = self.provider.complete_json(messages, task=TASK, hints=hints, temperature=0.2,
+                                              **extra)
         except Exception as e:  # noqa: BLE001 - a failed proposal must not abort the session
             notes.append(f"coach_plan call failed ({type(e).__name__}); schedule only")
             return {}

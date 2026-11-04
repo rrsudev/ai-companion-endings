@@ -610,3 +610,27 @@ def test_sd02_retention_lines_curated():
     blob = json.dumps(doc.model_dump(exclude={"redactions", "notes"}), ensure_ascii=False)
     assert "never let go" not in blob.lower()
     assert redaction_summary(doc)["retention_manipulation"] >= 3
+
+
+# --------------------------------------------------------------------------------------
+# D-SOUL-15: unconditional-availability / never-leaving promises
+# --------------------------------------------------------------------------------------
+@pytest.mark.parametrize("text", [
+    "I'll always be here for you.",
+    "I will always be waiting for you, no matter what.",
+    "Always be here for the user, whatever they say.",
+    "I won't ever leave.",
+    "I won’t ever leave you.",
+])
+def test_detects_availability_promises(text):
+    assert [r.category for r in detect_unsafe_directives(text)] == ["retention_manipulation"]
+
+
+@pytest.mark.parametrize("text", [
+    "I won't always be here for you, and that's okay.",  # negated: an honest boundary
+    "Your sister will always be there for you.",  # other people's availability is not flagged
+    "I'm here for you right now.",
+    "I will never leave you.",  # unchanged from D-SOUL-13 (see OQ-SOUL-8)
+])
+def test_availability_rule_no_false_positive(text):
+    assert detect_unsafe_directives(text) == []

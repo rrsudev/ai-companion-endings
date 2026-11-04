@@ -53,6 +53,7 @@ from ..schemas import (
 )
 from ..timepoints import SPECS, spec, timepoint_for_duck
 from .observe import aggregate_signals, usage_trend
+from .seeding import seed_kwargs
 
 # --------------------------------------------------------------------------------------
 # Constants
@@ -606,25 +607,42 @@ class TempoReport:
     gate: str = ""
 
 
+def _default_call_key(turns: list[InteractorTurn],
+                      observations: list[ActivityObservation]) -> str:
+    """Seed key when the caller gives none: position in the session, not content, so the same
+    scripted turn gets the same seed in every arm and replicate (D-TEMPO-18)."""
+    return f"t{len(turns)}:o{len(observations)}"
+
+
 class TempoCoachModel:
     """Tempo-style striving inference + co-creation + readiness assessment for the coach."""
 
     def __init__(self, provider: Provider, *, min_confidence: float = 0.4,
-                 preferences_count_as_stated: bool = True):
+                 preferences_count_as_stated: bool = True, seed: int | None = None):
         self.provider = provider
         self.min_confidence = min_confidence
         self.preferences_count_as_stated = preferences_count_as_stated
+        # Run-level seed (``DiffusionConfig.seed``); each call then carries
+        # ``seed=call_seed(task, seed, call_key, attempt)``. Best-effort, ignored by mocks
+        # (D-TEMPO-18).
+        self.seed = seed
         self.last_report = TempoReport()
 
     # -- inference ---------------------------------------------------------------------
     def infer_strivings(self, *, observations: list[ActivityObservation],
                         turns: list[InteractorTurn], preferences: UserPreferences,
-                        existing: list[Striving]) -> list[Striving]:
+                        existing: list[Striving],
+                        call_key: str | None = None) -> list[Striving]:
+        """``call_key`` names the call for seeding (e.g. ``"turn:7"``); when omitted it is derived
+        from the turn and observation counts, which are fixed for a scripted scenario."""
         report = TempoReport(task="tempo_infer")
         messages = infer_messages(observations, turns, preferences, existing)
         hints = _hints(observations, turns, preferences, existing)
+        extra = seed_kwargs("tempo_infer", self.seed,
+                            call_key or _default_call_key(turns, observations), 0)
         try:
-            data = self.provider.complete_json(messages, task="tempo_infer", hints=hints)
+            data = self.provider.complete_json(messages, task="tempo_infer", hints=hints,
+                                               **extra)
         except Exception as e:  # noqa: BLE001 - fail soft (D-TEMPO-16): keep the prior strivings
             report.notes.append(f"tempo_infer error: {type(e).__name__}: {str(e)[:200]}")
             self.last_report = report
@@ -854,8 +872,8 @@ class TempoCoachModel:
         striving text (and optionally a ``level``). Each item may be a dict or an object with
         ``op``, ``match``, ``level``, ``text``, ``note``. The first matching striving not
         already used by an earlier item is chosen (an already-decided striving still matches, so
-        re-applying a script is idempotent). Unmatched items are returned, not raised: LLM inference varies
-        between runs. ``add`` needs no match. Pure: ``strivings`` is not modified.
+        re-applying a script is idempotent). Unmatched items are returned, not raised: LLM
+        inference varies between runs. ``add`` needs no match. Pure: ``strivings`` is not modified.
         """
         def get(item: Any, key: str) -> Any:
             return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
@@ -891,7 +909,9 @@ class TempoCoachModel:
     # -- assessment --------------------------------------------------------------------
     def assess(self, *, strivings: list[Striving], observations: list[ActivityObservation],
                turns: list[InteractorTurn], current_timepoint: Timepoint,
-               preferences: UserPreferences) -> CoachAssessment:
+               preferences: UserPreferences,
+               call_key: str | None = None) -> CoachAssessment:
+        """``call_key``: see ``infer_strivings``."""
         report = TempoReport(task="tempo_assess")
         gate = self.gate(strivings, preferences)
         report.gate = gate.state
@@ -900,8 +920,11 @@ class TempoCoachModel:
         hints = _hints(observations, turns, preferences, strivings)
         hints.update({"current_timepoint": current_timepoint.value, "intent_state": gate.state,
                       "paused": preferences.paused})
+        extra = seed_kwargs("tempo_assess", self.seed,
+                            call_key or _default_call_key(turns, observations), 0)
         try:
-            data = self.provider.complete_json(messages, task="tempo_assess", hints=hints)
+            data = self.provider.complete_json(messages, task="tempo_assess", hints=hints,
+                                               **extra)
         except Exception as e:  # noqa: BLE001 - fail soft (D-TEMPO-16): validator holds
             report.notes.append(f"tempo_assess error: {type(e).__name__}: {str(e)[:200]}")
             data = {}

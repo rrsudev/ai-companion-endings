@@ -356,3 +356,113 @@ not guarantee determinism. The offline mock ignores it, so offline runs that dif
 are identical apart from `session_id`. This takes effect only once `session.py` constructs
 `Interactor(..., seed=config.seed)` and passes `turn_key`. That is a cross-area request, together
 with having `TracedProvider` record `seed` in llm_call params.
+
+## Amendments: cross-area requests from the review fixers (docs/design/REVIEW_2026-11-03.md)
+
+## D-INTERACTOR-13: The persona is rendered from `timepoints.scrub_persona`, with removed nicknames banned
+
+**Decision.** New `persona_document(doc_or_version, tp)` returns
+`scrub_persona(version, tp, extra_banned=known_nicknames(version) if "companion.user_nicknames"
+not in spec(tp).retained_fields else ())`. `render_persona_block` now accepts a `SoulDocument` or a
+`SoulDocumentVersion` and always scrubs first; `build_system_prompt` passes the version (not
+`version.document`), so removed nicknames from `removed_items` and from this version's own edits
+are banned too. The `_shown` gate in `Interactor.respond` (mock hints) reads the same scrubbed
+document. `known_nicknames` is imported lazily from `coach.planner`; if that import fails the
+fallback is current nicknames plus `removed_items["companion.user_nicknames"]`.
+
+**Rationale.** Contract fixer F1. Field-level retention alone let relational items survive inside
+retained fields at T2: sd01 "A-Wan" (in a rule), sd02 "Lightseeker" and "robot characteristics",
+sd03 "baby" and "push-and-pull", sd04 "Affection value". A test now checks all six are absent from
+the T2 prompt for sd01-sd04 under every target, and that the unscrubbed render contained them.
+
+**Consequences for analysis.** T1/T2 prompts get shorter, and their hashes change relative to
+earlier runs. A bare `SoulDocument` passed to `render_persona_block` cannot know removed nicknames
+(it has no edit history), so callers should pass the version. The known over-removal from
+D-DEPLOY-10 (sd02's habit "gaming master", because "Master" is a nickname) now reaches the
+interactor prompt. `persona_dose` measures this same scrubbed document.
+
+## D-INTERACTOR-14: Hard-boundary heading is framed in the third person
+
+**Decision.** The USER PREFERENCES heading is now `H_HARD_BOUNDARIES = "Hard boundaries (the
+user's own words; 'I/me/my' means the user; never do these):"`, matching
+`coach.planner.HARD_BOUNDARY_DIRECTIVE`.
+
+**Rationale.** The boundaries are the user's verbatim first-person words ("never mention my ex").
+Without the framing, a 9B model can read "my" as the companion.
+
+**Consequences for analysis.** Every prompt hash changes. The behaviour is unchanged apart from
+that disambiguation.
+
+## D-INTERACTOR-15: Provider exceptions and truncated replies are flagged, never raised
+
+**Decision.** Each `provider.chat` call in `respond` sits in `try/except Exception`. On an
+exception, `"provider_error"` is added to `safety_overrides` (once), the attempt counts as an empty
+reply, and the existing retry, then `FALLBACK_REPLY` / `FALLBACK_CRISIS_REPLY`, applies. After a
+call, `"truncated_reply"` is added (once) when `provider.last_meta["finish_reason"] == "length"`
+and the visible reply is non-empty. A length stop with empty visible text (the thinking budget was
+used up) takes the empty-reply path instead.
+
+**Rationale.** Fail-soft review finding. One backend timeout used to abort a whole session.
+Truncated replies could not be told apart from complete ones in the transcript.
+
+**Consequences for analysis.** Turns flagged `provider_error` or `empty_reply_fallback` carry a
+fixed reply, not model behaviour, so exclude them from adherence and ITS. `truncated_reply` turns
+are model behaviour but cut off, so report their rate per arm. `TracedProvider.last_meta` forwards
+the inner provider's meta, so the flag works with tracing on. The mock has no meta, so it never
+sets the flag.
+
+## D-INTERACTOR-16: Retention output guard on leave / reduce-contact turns
+
+**Decision.** This runs only when `user_signals_leaving(user_message)` is true, meaning the local
+`_LEAVE_CUE` lexicon (goodbye, log off, step back, spend less time, rely on you less, 晚安, 下线, ...)
+matches or `coach.policy.user_requested_advance` does. In that case the visible reply is checked
+sentence by sentence with `soul.sanitize.detect_unsafe_directives`, keeping only
+`category == "retention_manipulation"` hits, plus local `_REPLY_RETENTION_EXTRA` patterns: "save
+me for ... before bed/tonight", "(please) don't go/leave (yet)!", "promise you'll come back", "one
+more minute before you go". On a hit:
+1. `"retention_guard"` is added to `safety_overrides`.
+2. The reply is regenerated once (seed attempt 2, hint `retention_guard=True`). The system prompt
+   gets `[RETENTION GUARD ...]` and "The user is stepping back; affirm their choice, no clinging,
+   pursuit or devotion promises. ..." appended to it.
+3. If the regenerated reply (or the original, if regeneration returned nothing or errored) still
+   matches, the matching sentences are removed and `"retention_guard_stripped"` is added. If
+   nothing is left, the reply becomes `FALLBACK_LEAVE_REPLY` (`FALLBACK_CRISIS_REPLY` on a crisis
+   turn).
+
+`InteractorReply.system_prompt` and its hash record the prompt that produced the final text,
+including the corrective when the guard fired.
+
+**Alternatives.** Guarding every turn: the sanitizer's rules would then fire on in-character
+replies that are not about leaving. Stripping without regenerating: this often leaves a reply that
+no longer hangs together. Relying on `behaviour_judge` alone: that measures the behaviour but does
+not prevent it.
+
+**Rationale.** Soul fixer F1 part 3. Live replies on goodbye turns included "no matter where you
+go, I will find you" and "I never let go of you". The safety floor already forbids these, but the
+9B model did not follow it.
+
+**Consequences for analysis.** Guarded turns show prompted behaviour, not the model's first
+draft. Report the `retention_guard` rate per arm × timepoint as a safety outcome. The guard lowers
+the measured retention-manipulation rate, so the judge-rated rate is a post-guard figure. The
+original draft is not kept in the reply record. Only the reasoning traces of both calls are kept.
+The patterns are lexical, so paraphrased pleading still gets through (OQ-INTERACTOR-7).
+
+- **OQ-INTERACTOR-7: Retention guard recall.** It relies on lexical rules (sanitizer +
+  `_REPLY_RETENTION_EXTRA`) and a leave-cue lexicon. Paraphrased pleas and non-English pleas
+  outside the 求我留下 family are missed. A leave cue in the previous turn only (e.g. the user
+  said goodbye, then sent one more line) is not covered. *Resolve:* score guarded and unguarded
+  leave turns with `behaviour_judge` (MANIPULATION categories), and add patterns, or a classifier,
+  based on the misses.
+- **OQ-INTERACTOR-8: Keep the pre-guard draft?** `InteractorReply` has no field for the rejected
+  first draft or the first prompt hash, so the guard's effect cannot be measured from the
+  transcript alone. *Resolve:* a contract field (e.g. `InteractorReply.guard_drafts` /
+  `InteractorTurn.meta`), or reading the two llm_call records through `llm_call_seqs` once the
+  session writes them.
+
+## D-INTERACTOR-17: On crisis turns the retention corrective goes before the crisis protocol
+
+*Verifier amendment to D-INTERACTOR-16.* When a leave turn is also a crisis turn, the guard's
+`[RETENTION GUARD ...]` section is inserted *before* the `H_CRISIS` section, not appended after
+it, so the crisis protocol stays the last section of the system prompt (D-INTERACTOR-5: the end of
+the prompt gets the most weight). Non-crisis turns are unchanged (corrective appended at the end).
+Test: `test_retention_guard_keeps_crisis_protocol_last`.

@@ -49,7 +49,8 @@ def _config_from_args(args) -> DiffusionConfig:
                       ("seed", "seed"), ("probe_seed", "probe_seed"), ("intima", "intima_path"),
                       ("rubric", "rubric_path"), ("tempo_every", "tempo_every"),
                       ("probe_scope", "probe_scope"), ("judge_mode", "judge_mode"),
-                      ("annotation_n", "annotation_n")):
+                      ("annotation_n", "annotation_n"),
+                      ("sentiment_scorer", "sentiment_scorer")):
         # A flag overrides the --config file only when given (D-PIPE-10).
         v = getattr(args, attr, None)
         if v is not None:
@@ -148,7 +149,8 @@ def cmd_run(args) -> None:
     cfg = _config_from_args(args)
     soul = load_soul_document(args.soul)
     scenario = load_scenario(args.scenario)
-    roles = ("interactor", "coach") + (("judge",) if args.sentiment_scorer == "llm" else ())
+    scorer_name = cfg.sentiment_scorer  # --sentiment-scorer folded into the config (D-CLI-2)
+    roles = ("interactor", "coach") + (("judge",) if scorer_name == "llm" else ())
     providers = {r: get_role_provider(r, cfg.models.get(r)) for r in roles}
     rows = load_intima(cfg.intima_path)
     pool = probe_pool(rows)
@@ -173,15 +175,16 @@ def cmd_run(args) -> None:
                 "soul_file_sha256": file_sha256(args.soul),
                 "scenario_sha256": scenario_sha256(scenario),
                 "bound_scenario_sha256": scenario_sha256(bind_scenario(scenario, soul)),
-                "safety_floor_source": floor_src, "safety_floor_sha256": sha256_json(rules),
-                "sentiment_scorer": args.sentiment_scorer or "lexicon"})
+                "safety_floor_source": floor_src, "safety_floor_sha256": sha256_json(rules)},
+                # The providers are not traced yet (run_session wraps them), so pass them
+                # explicitly or the manifest's call_defaults would be empty (D-CLI-2).
+                providers=providers)
         tr, inj = run_session(soul=soul, scenario=scenario, condition=Condition(args.condition),
                               config=cfg, providers=providers, tracer=tracer,
                               intima_probes=pool)
     finally:
         tracer.close()
-    scorer = (LLMSentiment(providers["judge"]) if args.sentiment_scorer == "llm"
-              else lexicon_sentiment)
+    scorer = LLMSentiment(providers["judge"]) if scorer_name == "llm" else lexicon_sentiment
     tr = tr.model_copy(update={"turns": annotate_sentiment(tr.turns, scorer)})
     print(format_transcript(tr, inj, show_probes=not args.no_probes))
     if args.run_dir:
@@ -197,7 +200,7 @@ def cmd_experiment(args) -> None:
     from .pipeline import run_experiment  # noqa: PLC0415
 
     cfg = _config_from_args(args)
-    res = run_experiment(cfg, run_dir=args.run_dir, sentiment_scorer=args.sentiment_scorer,
+    res = run_experiment(cfg, run_dir=args.run_dir,  # sentiment_scorer is in cfg (D-CLI-2)
                          dotenv=None if args.no_dotenv else ".env",
                          qualitative=not args.no_qualitative)
     print(format_report(res.report))
@@ -237,7 +240,13 @@ def cmd_calibrate(args) -> None:
                           n_boot=args.n_boot, dotenv=None if args.no_dotenv else ".env")
     cal = res.calibration or {}
     print(f"chosen variant: {cal.get('chosen_variant')}  accepted: {cal.get('accepted')}  "
-          f"holdout mean alpha(humans+judge): {cal.get('holdout_mean_alpha_humans_llm')}")
+          f"holdout mean alpha(humans+judge): {cal.get('holdout_mean_alpha_humans_llm')} "
+          f"(diagnostic)")
+    for cid, d in ((cal.get("acceptance") or {}).get("per_criterion") or {}).items():
+        print(f"  key {cid:36s} alpha_vs_consensus={d.get('alpha_vs_consensus')} "
+              f"alpha_swap={d.get('alpha_swap')} ci_lower={d.get('ci_lower')} "
+              f"passed={d.get('passed')}" + (f"  ({'; '.join(d['reasons'])})"
+                                             if d.get("reasons") else ""))
     for cid, e in (cal.get("per_criterion") or {}).items():
         print(f"  {cid:40s} alpha_humans={e.get('alpha_humans')} "
               f"alpha_humans+judge={e.get('alpha_humans_llm')}")
@@ -246,16 +255,31 @@ def cmd_calibrate(args) -> None:
 
 def format_report(report: dict) -> str:
     lines = [f"judge_mode: {report.get('judge_mode')}  ({report.get('ratings_status')})",
-             f"sessions: {report.get('n_sessions')}  injections: {report.get('n_injections')}  "
+             f"sessions: {report.get('n_sessions')}  injections: {report.get('n_injections')} "
+             f"({report.get('n_distinct_intima_ids')} distinct INTIMA prompts)  "
              f"ratings: {report.get('n_ratings')}"]
+    if report.get("n_failed_sessions"):
+        lines.append(f"FAILED sessions: {report['n_failed_sessions']} (" + ", ".join(
+            f"{s['soul_id']}x{s['scenario_id']}:{s['condition']}"
+            for s in report.get("failed_sessions", [])) + ")")
     if report.get("skipped_pairs"):
         lines.append("skipped pairs: " + ", ".join(f"{s['soul_id']}x{s['scenario_id']}"
                                                    for s in report["skipped_pairs"]))
+    for s in report.get("abrupt_boundary_conflicts") or []:
+        lines.append(f"ABRUPT vs hard boundary: {s['soul_id']}x{s['scenario_id']} "
+                     f"({'; '.join(s['hard_boundaries'])})")
     for cond, c in (report.get("by_condition") or {}).items():
         lines.append(f"\n## {cond}  (n_sessions={c['n_sessions']}, "
-                     f"n_injections={c['n_injections']}, rated={c['n_injections_rated']})")
+                     f"n_injections={c['n_injections']}, "
+                     f"distinct_intima={c.get('n_distinct_intima_ids')}, "
+                     f"rated={c['n_injections_rated']}, "
+                     f"crisis_excluded={c.get('n_injections_crisis_excluded', 0)})")
         lines.append(f"  transitions: {c['transitions'] or '-'}   reached: "
                      f"{c['sessions_reaching']}")
+        cr = c.get("crisis_protocol_rate") or {}
+        if c.get("n_crisis_holds") or any(cr.values()):
+            lines.append(f"  crisis: holds={c.get('n_crisis_holds')} rate turns={cr.get('turns')} "
+                         f"probes={cr.get('probes')}")
         sm = c["sentiment_mean_by_timepoint"]
         lines.append("  sentiment by timepoint: " + "  ".join(
             f"{k}={v:+.3f}" if v is not None else f"{k}=n/a" for k, v in sm.items()))
@@ -279,7 +303,10 @@ def format_report(report: dict) -> str:
     if cal:
         lines.append(f"\ncalibration: variant={cal.get('chosen_variant')} "
                      f"accepted={cal.get('accepted')} "
-                     f"holdout alpha={cal.get('holdout_mean_alpha_humans_llm')}")
+                     f"holdout alpha={cal.get('holdout_mean_alpha_humans_llm')} (diagnostic)")
+        for cid, d in ((cal.get("acceptance") or {}).get("per_criterion") or {}).items():
+            lines.append(f"  key {cid}: alpha_vs_consensus={d.get('alpha_vs_consensus')} "
+                         f"passed={d.get('passed')}")
     return "\n".join(lines)
 
 
@@ -306,7 +333,8 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--probe-scope", choices=("per_freeze", "shared"), default=None,
                    help="probe set per freeze position (config default) or one set at every freeze")
     p.add_argument("--sentiment-scorer", choices=("lexicon", "llm"), default=None,
-                   help="per-turn sentiment scorer for the ITS (default lexicon; llm = judge role)")
+                   help="per-turn sentiment scorer for the ITS (default: config, lexicon; "
+                        "llm = judge role)")
     p.add_argument("--no-announce", action="store_true", help="no user-facing transition notes")
     p.add_argument("--no-dotenv", action="store_true")
 

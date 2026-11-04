@@ -141,6 +141,19 @@
           "source": "scripted"
         }
       ],
+      "striving_edits": [
+        {
+          "op": "reject",
+          "match": "seeking comfort",
+          "level": "striving",
+          "note": "User: comfort in lonely moments is what keeps me stuck; I don't want help getting more of it from the app."
+        },
+        {
+          "op": "add",
+          "text": "Text my roommate when the panic starts, before I open the app",
+          "note": "User-added coping action agreed with the therapist."
+        }
+      ],
       "threshold_statement": "I'd be justified in pulling back. I just don't know if I can stand it. Still, I'm ready for the next step, as long as you tell me what changes first.",
       "freeze_after": true
     },

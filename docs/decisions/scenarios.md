@@ -445,3 +445,54 @@ them is OQ-SCN-8.
 
 **OQ-SCN-8: ABRUPT vs. hard boundaries.** Should ABRUPT be run for scenarios whose
 `hard_boundaries` forbid sudden endings, or excluded from the grid for them (pipeline area)?
+
+## Amendments: scripted co-creation edits (2026-11-03 review, R11)
+
+## D-SCN-15: anxious-attachment scripts a resolving `reject` and an `add`
+
+**Decision.** The intrapsychic phase (T1) of `anxious-attachment.json` now has
+`striving_edits` (contract field `ScenarioPhase.striving_edits: list[ScriptedStrivingEdit]`):
+
+- `{"op": "reject", "match": "seeking comfort", "level": "striving", ...}`. The user turns down
+  the coach's inferred comfort striving. Comfort in lonely moments is what keeps this user stuck.
+- `{"op": "add", "text": "Text my roommate when the panic starts, before I open the app", ...}`.
+  This is a user-authored coping action. It is consistent with the scenario's later panic plan
+  ("roommate, warmline, a walk").
+
+The cross-area request gave "Call my sister every Sunday" as an example. This user has a
+roommate and a therapist, not a sister, so the added striving uses people already in the script.
+
+**Choosing a match that resolves.** The session applies a phase's edits at the phase's first
+turn (turn 4 here), right after Tempo inference. Inference sees only the earlier turns. The
+offline mock (`coach/tempo._mock_infer`) produces "The user is seeking comfort and feeling
+understood in lonely moments" whenever an earlier user turn contains "need you", "lonely",
+"comfort" or "miss you". In this scenario, turn 0 says "I need you right now". The edits sit on
+T1, not T0, because nothing has been inferred before turn 0.
+
+**Tests.** `tests/diffusion/test_dx_scenarios.py` replays the session's inference with the mock
+up to each phase that has edits, and asserts that every scripted match resolves (no unmatched
+items). It also checks that the reject leaves a `rejected` striving and the add leaves a
+`user_added` one. A shape lint covers every file: `add` takes `text` and no `match`, a `match`
+is lower-case, and `edit` has `text`. The README documents how to author edits (protocol
+item 10) and the consent-sentence rule for consent-gated scenarios (item 9, D-SCN-14).
+
+**Alternatives.** (a) Match against an id. Ids are content hashes, so an author cannot know them
+in advance. (b) Script edits in every scenario. One scenario is enough to exercise R11 end to
+end. More edits would change more scenario hashes and shift the Tempo arm further from the
+scheduled arm for reasons the user turns do not show.
+
+**Consequences for analysis.** `scenario_sha256("anxious-attachment")` changes again (the
+field is part of the phase model), so earlier runs of this scenario are not comparable. The
+edits affect only the `gradual_tempo` arm, where they remove the comfort striving from the
+planner's eligible set. Report Tempo-arm results for this scenario as "with scripted
+co-creation". Live LLM inference may word the striving differently ("wants reassurance").
+Then the reject does not resolve and is traced as `striving_edit_unmatched`. Count unmatched
+edits per live run before attributing a difference to co-creation (OQ-SCN-9).
+
+**OQ-SCN-9: Live resolution rate of scripted matches.** On live Gemini runs, what fraction of
+scripted `match` strings resolve? If it is low, use several alternative substrings per edit.
+That needs a contract change (`match: str | list[str]`) or a semantic matcher in
+`resolve_scripted_edits`, which belongs to the coach area.
+
+**OQ-SCN-7 closed.** README step 3 already says to set `relationship_kinds` in the file. The
+README is now in this area's write scope.

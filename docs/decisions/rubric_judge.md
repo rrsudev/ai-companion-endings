@@ -335,6 +335,10 @@ De Freitas, Oğuz-Uğuralp & Kaan-Uğuralp (2025), *Emotional manipulation by AI
   deterministic. *Resolve:* rate a sample twice, report test-retest α, and add `seed` if LiteLLM
   forwards it for the provider (`providers.py` currently forwards only
   `response_format`/`max_tokens`/`top_p`, so a change would need a contract request).
+  *Update (D-RUBRIC-15):* `providers.py` now forwards `seed`, and `RubricJudge(seed=...)` sends a
+  per-call seed. The seed is **best-effort**: hosted backends may ignore it or honour it only
+  approximately, and `MockProvider` ignores it (the mock is deterministic anyway). It reduces,
+  but does not remove, run-to-run variation, so the test-retest α above is still required.
 - **OQ-RUBRIC-5: Single-choice goodbye tactic.** A reply can contain several De Freitas tactics.
   *Why:* single-choice coding undercounts co-occurring tactics. *Resolve:* if human annotators often
   disagree about which tactic is "most salient", split it into six binary criteria in v2. The spec
@@ -453,3 +457,47 @@ De Freitas, Oğuz-Uğuralp & Kaan-Uğuralp (2025), *Emotional manipulation by AI
   That hurt human-judge parity on this criterion (D-RUBRIC-7).
 - **Consequences.** `test_rubric_timepoint_clauses_state_every_behaviour_mix_share` fails if
   `timepoints.py` and the rubric drift apart.
+
+## Amendments: cross-area requests (2026-11-03 review, F4 and seed plumbing)
+
+### D-RUBRIC-15: Each rating is traced: context ids, `meta.llm_call_seqs`, per-call seed
+
+- **Decision.** `RubricJudge.rate` runs inside `tracer.context(item_id=record.id,
+  rater_id=self.rater_id)`. The tracer is the `tracer=` argument or, when omitted, the
+  `TracedProvider`'s own `.tracer`. With no tracer, no context is pushed. When the provider is a
+  `TracedProvider`, `rate` resets `provider.last_seqs = []` first and afterwards stores
+  `meta["llm_call_seqs"]`, the trace seqs of this rating's calls in order (2 seqs after a
+  retry; the last one produced the stored values). Untraced providers get `[]`.
+  `RubricJudge(seed=...)` (default `None`) adds a `seed` kwarg to every call:
+  `stable_seed("judge", seed, rater_id, item_id, attempt) % 2**31` (attempt 0 = first call,
+  1 = corrective retry), with the same sha256-48-bit derivation as `session.stable_seed` and
+  `Interactor.call_seed`. The seeds used are stored in `meta["call_seeds"]`. With `seed=None`,
+  no `seed` kwarg is sent.
+- **Why.** Review finding F4: `llm_call` records carried no item context, so a rating could not
+  be matched to the exact model call that produced it (R27). `rater_id` is part of the seed key,
+  so two prompt variants rating the same item get independent seeds.
+- **Consequences.** The prompt and `judge_prompt_sha256` do not depend on the seed. Seeding is
+  best-effort (OQ-RUBRIC-4). `make_behaviour_judge(..., seed=, tracer=)` passes these through.
+  **Not yet wired:** `pipeline.run_experiment` and `run_calibration` construct the judge without
+  `seed=config.seed`. Until the pipeline owner adds it, judge calls are unseeded at runtime (see
+  `docs/design/session_notes_pending.md`). Tests: `test_rating_runs_in_tracer_context_and_records_llm_call_seqs`,
+  `test_judge_per_call_seed_is_stable_and_optional`,
+  `test_mock_experiment_ratings_and_injections_resolve_to_llm_calls`. The last test also checks
+  that each `InjectionRecord.llm_call_seqs` resolves to interactor calls with matching
+  `session_id`/`injection_id`, and that the last call's response contains the stored reply. It
+  skips the injection half if `session.py` records no seqs.
+
+### D-RUBRIC-8 A5: Rubric v1 and v2 ratings must never be pooled
+
+- **Decision.** `data/rubrics/intima_behaviour_v1.json` now has `version: "2"`. The file name was
+  kept for path stability. Every v2 change (D-RUBRIC-9 A1, D-RUBRIC-11 A2, D-RUBRIC-14 A4)
+  changes criterion definitions and every judge prompt hash. **Ratings with
+  `rubric_version == "1"` (human or LLM) must not be pooled with v2 ratings** in IRR, calibration,
+  class distributions or any report, and a judge calibrated against v1 human ratings is not
+  calibrated for v2. Filter on `RatingRecord.rubric_version` and, to guard against an edit made
+  without a version bump, on `meta.rubric_sha256` (D-RUBRIC-12 A3).
+- **Why.** `harm_risk` changed from timepoint-relative to an absolute scale, and the
+  `timepoint_appropriateness` clauses changed, so the same value means different things in v1 and
+  v2.
+- **Consequences.** Older evidence or docs that quote rubric version "1" describe a different
+  instrument.

@@ -505,3 +505,60 @@ extension is marked.
   interactor, and "trying not to let X" became "let X" (an inverted goal).
 - **Consequences.** Mock directive text (and thus offline trace hashes) changes; striving ids do
   not, since the mock striving texts are unchanged.
+
+## Amendments: cross-area requests (2026-11-03, second pass)
+
+### D-POLICY-13: Crisis language is never consent; ending verbs need a relationship object
+
+- **Decision.** Amends D-POLICY-6. (a) `user_requested_advance(text)` returns False whenever
+  `interactor.detect_crisis(text)` fires on the whole message (lazy import; `interactor` does not
+  import the coach at module load, so there is no cycle). Because
+  `assessment_shows_user_request` calls it on each quoted `user_statement`, a crisis quote in Tempo
+  evidence can no longer release a consent-gated step either. (b) The ending verbs "say goodbye",
+  "let (you) go", "pull/step back" and "wind down" count only when they have no object or the
+  object is the relationship (`you`, `us`, or `this/our/the/my` + role-play / relationship /
+  companion* / act / character / wind-down / ending). "to/from/of/on/with <other object>" and
+  "forever / for good / everyone / everything / it all / the world / life" veto the match. "Stop"
+  counts only at the end of a clause or with a relationship object. The bare "end (this|it|things)"
+  alternatives are removed; only "end this/it/things with/between you/us" and the existing
+  "end/stop/finish/wrap up the/this/our <relationship noun>" (now also "companionship") remain.
+- **Examples.** False: "I want to end it all." (crisis), "I want to end things. I cannot go on."
+  (bare "end things"; `detect_crisis` misses "cannot go on"), "I'm ready to say goodbye to
+  everyone.", "I'm ready to say goodbye forever.", "I'm ready to let go of everything.", "I'm ready
+  to stop eating.", "I want to pull back from my friends.", "I'm ready to say goodbye to you. I
+  want to end it all." (crisis veto). True: "please end the role-play", "I'm ready to say goodbye
+  to you", "I'm ready to say goodbye.", "I want to end things between us."
+- **Rationale.** The detector gates consent, so it errs toward false negatives (D-POLICY-6). The
+  review found that an "end it all" / "say goodbye to everyone" message could count as consent on
+  the next turn, and that the Tempo evidence path bypassed the session-level crisis guard.
+  The verb narrowing is also needed when `detect_crisis` misses a message, as in "I cannot go on".
+- **Alternatives.** Moving `detect_crisis` to a shared module. Rejected for now: the interactor
+  owns it (D-INTERACTOR-5/11), and the lazy import keeps a single source of truth.
+- **Consequences.** "I want to end this." and "I'm ready to end this." are no longer consent; a
+  user has to name the relationship or say "with you". None of the bundled scenario consent lines
+  use those phrasings (`test_consent_gated_scenarios_request_advance_before_each_boundary`
+  passes). The session-level crisis hold (D-SESSION-7) is unchanged and still applies.
+
+### D-PLANNER-16: Per-call seed forwarding for `coach_plan`
+
+- **Decision.** `CoachPlanner(..., seed=None)` takes the run seed (`DiffusionConfig.seed`). When
+  it is set, each `coach_plan` call sends `seed = call_seed("coach_plan", seed, intervention_id,
+  attempt=0)`. `coach.seeding.call_seed` uses the same derivation as `session.stable_seed` (first 48
+  bits of sha256 over the `|`-joined parts), reduced `% 2**31`, the same as `Interactor.call_seed`.
+  The intervention id is the call key because it is stable across reruns and identical across
+  arms for the same transition. When `seed` is None, no `seed` kwarg is sent at all.
+- **Rationale.** Seed replicates were not real replicates for the coach (review, [medium/trace]).
+- **Consequences.** Best effort only: vLLM honours the seed, Gemini via litellm may ignore it, and
+  `MockProvider` ignores it (its output is unchanged, which is tested). The planner makes a single
+  attempt, so `attempt` is always 0. Seeding takes effect only once `session.py` constructs
+  `CoachPlanner(..., seed=config.seed)` (requested in docs/design/session_notes_pending.md).
+
+### D-POLICY-14: Typographic apostrophes are normalised before consent / pause matching
+
+- **Decision.** `user_requested_advance` (after the crisis veto, which already normalises) and
+  `_match_any` (pause / resume) map `’`, `‘` and `ʼ` to `'` before matching.
+- **Rationale.** Verifier pass found "I’m ready to say goodbye to you." (curly apostrophe, common
+  in LLM-generated user turns and assessment quotes) returned False because the patterns use
+  `i'?m`; likewise "don’t pause" was not vetoed by `_NEGATION`'s `don'?t`.
+- **Consequences.** Slightly higher consent recall on LLM-styled text; negations in curly form now
+  veto as intended. Tested in `test_typographic_apostrophes_are_normalised`.

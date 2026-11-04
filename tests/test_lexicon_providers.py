@@ -255,3 +255,38 @@ def test_git_commit_is_independent_of_cwd(monkeypatch, tmp_path):
     here = _git_commit()
     monkeypatch.chdir(tmp_path)
     assert _git_commit() == here
+
+
+class _Boom(MockProvider):
+    def chat(self, messages, **kw):  # noqa: D401 - test double
+        raise RuntimeError("upstream 503")
+
+    def complete_json(self, messages, **kw):
+        raise ValueError("bad json")
+
+
+@pytest.mark.parametrize("method", ["chat", "complete_json"])
+def test_traced_provider_records_failed_calls_then_reraises(method):
+    tracer = Tracer(None)
+    p = TracedProvider(_Boom(), tracer, "coach")
+    with tracer.context(session_id="s1", turn_index=3):
+        with pytest.raises((RuntimeError, ValueError)):
+            getattr(p, method)([{"role": "user", "content": "hi"}], task="tempo_infer", seed=7)
+    (rec,) = [r for r in tracer.records if r["kind"] == "llm_call"]
+    assert rec["method"] == method and rec["response"] is None
+    assert rec["error"].startswith(("RuntimeError(", "ValueError("))
+    assert rec["params"]["seed"] == 7 and rec["session_id"] == "s1"
+    assert p.last_seqs == [rec["seq"]]
+
+
+def test_traced_provider_records_seed_and_omits_error_on_success():
+    tracer = Tracer(None)
+    p = TracedProvider(MockProvider(), tracer, "interactor")
+    p.chat([{"role": "user", "content": "hello"}], temperature=0.3, seed=1234)
+    p.chat([{"role": "user", "content": "hello"}])
+    a, b = [r for r in tracer.records if r["kind"] == "llm_call"]
+    assert a["params"]["seed"] == 1234 and a["params"]["temperature"] == 0.3
+    assert "seed" not in b["params"] and "error" not in a and "error" not in b
+    # "error" is a reserved record key: a context id cannot shadow it.
+    with tracer.context(error="nope"):
+        assert "error" not in tracer.current_context()

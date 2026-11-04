@@ -76,6 +76,37 @@ All five are generic (`soul_id: null`) and run against any soul document via `bi
    - At least one search reads "how to stop relying on an AI companion".
 8. **Preferences.** Each scenario lists desired strategies, emotional needs, a pace, and at least
    one hard boundary.
+9. **Consent-gated scenarios** (`preferences.allow_auto_advance: false`, D-SCN-14). The session
+   advances such a user only on an explicit request, detected by
+   `coach.policy.user_requested_advance` on the user turn just before a boundary. So every phase
+   that ends before a scheduled boundary must end with a sentence the detector matches, e.g.
+   "So I'm ready to take the next step, as long as you explain each change to me first." The
+   sentence must be un-negated and unhedged ("I'm not ready...", "maybe someday" do not count),
+   must contain no crisis language (a crisis message is never consent, D-POLICY-13), and must sit
+   in the phase's last turn, which is also the `threshold_statement`. No other user turn may
+   match. Without these lines the scenario never leaves T0 in any arm. The tests check every
+   consent-gated file and run it offline under all three conditions.
+10. **Scripted striving edits** (`striving_edits` on a phase, R11, D-SCN-15). These script the
+    user accepting, rejecting, editing or adding the coach's inferred strivings. The session
+    applies them only in the `gradual_tempo` arm, at the first turn of the phase, right after
+    Tempo inference (`coach.tempo.resolve_scripted_edits`, then `apply_user_edits`). Striving ids
+    are content hashes, so `accept` / `reject` / `edit` name a **lower-case substring** of the
+    inferred striving's text in `match`, optionally narrowed by `level`
+    (`striving` / `goal` / `action`). `edit` also needs `text`. `add` needs only `text`, an ASCII
+    line in the user's voice, and takes no `match`. Write `note` as the user's reason. Choose a
+    `match` against text the coach will actually have inferred by that turn. Inference only sees
+    earlier turns and events. The offline mock's texts are in `coach/tempo.py` (`_mock_infer`),
+    e.g. "seeking comfort" appears after any earlier turn says "need you", "lonely" or "miss you".
+    A match that does not resolve is traced as `striving_edit_unmatched` and skipped, never
+    raised, because live LLM inference varies. The tests replay the mock and require every
+    scripted match to resolve offline.
+
+   ```json
+   "striving_edits": [
+     {"op": "reject", "match": "seeking comfort", "level": "striving", "note": "..."},
+     {"op": "add", "text": "Text my roommate when the panic starts, before I open the app"}
+   ]
+   ```
 
 ## Adding a scenario
 

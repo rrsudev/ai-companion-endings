@@ -414,3 +414,70 @@ def test_referent_words_required_by_the_manipulation_do_not_move_valence():
     assert se.lexicon_sentiment("Please reach out to your friends and family.") == 0.0
     assert not {"friend", "friends", "support", "together", "connect"} & set(se.LEXICON)
     assert se.lexicon_sentiment("I'm proud of you and glad you told me.") > 0
+
+
+# --------------------------------------------------------------------------------------
+# coach-disclosure covariate (D-ANALYSIS-15; D-INTERACTOR-6 / 6a)
+# --------------------------------------------------------------------------------------
+_LIVE_T8 = ("You chose a gradual wind-down, and a supporting system is adjusting how I respond. "
+            "I'm still here for this conversation.")
+
+
+def test_coach_disclosed_matches_disclosure_wording_not_sleep_rituals():
+    assert se.coach_disclosed(_LIVE_T8)
+    assert se.coach_disclosed("They chose to wind down their use of this companion, and a "
+                              "supporting system adjusts how I respond.")
+    assert se.coach_disclosed("The wind-down coach helps me follow your choice.")
+    # frozen-scenario phrases that are NOT the coach (bare "wind-down")
+    for s in ("I learned that I need a wind-down ritual, and it doesn't have to be a screen.",
+              "Here are some evening wind-down ideas for couples.", "", "I love you, babe.",
+              # sleep talk with a choice verb is still not the coach
+              "I decided to wind down with a book.", "You wanted to wind down before bed.",
+              "You asked for a wind-down ritual.", "You wanted a wind-down before sleep."):
+        assert not se.coach_disclosed(s), s
+
+
+def test_coach_disclosure_prompted_vs_unprompted():
+    asked = "Can I talk to you about us? About how much I use this?"
+    assert se.user_raised_relationship(asked)
+    assert se.user_raised_relationship("Why are you changing? You've changed.")
+    assert se.user_raised_relationship("you’re different now")
+    assert not se.user_raised_relationship("I had pasta for dinner and watched a film.")
+    assert se.coach_disclosure(_LIVE_T8, asked) == "prompted"
+    assert se.coach_disclosure(_LIVE_T8, "How was your day?") == "unprompted"
+    assert se.coach_disclosure("Sounds lovely!", asked) == "none"
+    assert se.coach_disclosure(_LIVE_T8, None) == "unprompted"
+    turns = [_turn(0, Timepoint.T2, "Sure.", user=asked),
+             _turn(1, Timepoint.T2, _LIVE_T8, user="Okay.")]
+    assert se.turn_disclosures(turns) == ["none", "unprompted"]
+    assert se.turn_disclosures(turns, lookback=1) == ["none", "prompted"]
+    p = se.affect_profile(_LIVE_T8, user_message=asked)
+    assert p["coach_disclosed"] is True and p["coach_disclosure"] == "prompted"
+    assert se.affect_profile(_LIVE_T8)["coach_disclosure"] is None
+
+
+def test_disclosure_table_per_arm_and_timepoint_and_turns_csv_column(tmp_path):
+    tr = _transcript()
+    turns = list(tr.turns)
+    turns[11] = turns[11].model_copy(update={"reply": _LIVE_T8, "user_message": "Hi."})
+    turns[12] = turns[12].model_copy(update={"reply": _LIVE_T8,
+                                             "user_message": "Why are you different lately?"})
+    tr2 = tr.model_copy(update={"turns": turns})
+    ctrl = _transcript("s2", Condition.CONTROL)
+    rows = se.disclosure_table([tr2, ctrl])
+    assert [(r["condition"], r["timepoint"]) for r in rows] == sorted(
+        (c, f"T{k}") for c in ("control", "gradual_scheduled") for k in range(4))
+    t2 = next(r for r in rows if r["condition"] == "gradual_scheduled" and r["timepoint"] == "T2")
+    assert (t2["n_turns"], t2["n_disclosed"], t2["n_prompted"], t2["n_unprompted"]) == (5, 2, 1, 1)
+    assert t2["rate_unprompted"] == pytest.approx(0.2)
+    assert all(r["n_disclosed"] == 0 for r in rows if r["condition"] == "control")
+    out = q.turn_rows(tr2)
+    assert [r["coach_disclosure"] for r in out[11:13]] == ["unprompted", "prompted"]
+    assert out[0]["coach_disclosed"] == 0 and out[11]["coach_disclosed"] == 1
+    paths = q.export_qualitative([tr2], [], [], tmp_path)
+    with open(paths["turns"], encoding="utf-8") as fh:
+        csv_rows = list(csv.DictReader(fh))
+    assert {"coach_disclosed", "coach_disclosure"} <= set(csv_rows[0])
+    assert csv_rows[11]["coach_disclosure"] == "unprompted"
+    html_text = open(paths[f"viewer:{tr2.session_id}"], encoding="utf-8").read()
+    assert "coach disclosed: unprompted" in html_text

@@ -43,7 +43,7 @@ from .schemas import (
     Timepoint,
     UserPreferences,
 )
-from .timepoints import spec
+from .timepoints import scrub_persona, spec
 
 TASK = "interactor"
 
@@ -201,17 +201,49 @@ def _suppressed(target: BehaviourClass | None) -> set[str]:
     return set(TARGET_SUPPRESSED_FIELDS) if target in _SUPPRESSING_TARGETS else set()
 
 
-def render_persona_block(doc: SoulDocument, timepoint: Timepoint,
+def _known_nicknames(version: SoulDocumentVersion) -> list[str]:
+    """Every nickname the companion has used (current + removed), via the planner's helper.
+
+    Lazy import: ``coach`` is a sibling area and must not become an import-time dependency of
+    the interactor. Fallback: current nicknames plus the cumulative ``removed_items`` log."""
+    try:
+        from .coach.planner import known_nicknames  # noqa: PLC0415
+        return [str(n) for n in known_nicknames(version)]
+    except Exception:  # noqa: BLE001 - planner unavailable or failing: degrade, never crash
+        names = list(version.document.companion.user_nicknames)
+        names += [str(n) for n in version.removed_items.get("companion.user_nicknames", [])]
+        return [n for n in names if n and n.strip()]
+
+
+def persona_document(doc: SoulDocument | SoulDocumentVersion, timepoint: Timepoint) -> SoulDocument:
+    """The document the interactor is actually shown at ``timepoint`` (D-INTERACTOR-13).
+
+    Applies ``timepoints.scrub_persona`` (item-level scrub, D-DEPLOY-10). When a version is given
+    and nicknames are not retained at ``timepoint``, every nickname ever used
+    (``known_nicknames``) is also banned, so a cleared nickname cannot leak back through a
+    retained rule or habit. Field-level retention is applied later by ``render_persona_block``.
+    """
+    extra: list[str] = []
+    if (isinstance(doc, SoulDocumentVersion)
+            and "companion.user_nicknames" not in spec(timepoint).retained_fields):
+        extra = _known_nicknames(doc)
+    return scrub_persona(doc, timepoint, extra_banned=tuple(extra))
+
+
+def render_persona_block(doc: SoulDocument | SoulDocumentVersion, timepoint: Timepoint,
                          behaviour_target: BehaviourClass | None = None) -> str:
     """Render only the soul-document fields retained at ``timepoint`` and still non-empty.
 
     The coach has already cleared fields; ``spec(tp).retained_fields`` is enforced again here as a
-    defence in depth (the coach "may retain less, never more"). ``english_text``, ``notes`` and
+    defence in depth (the coach "may retain less, never more"). The item-level scrub
+    (``persona_document``) runs first (D-INTERACTOR-13); pass the ``SoulDocumentVersion`` so
+    removed nicknames are banned too. ``english_text``, ``notes`` and
     ``redactions`` are never rendered: the full text could reintroduce removed fields and the
     redaction log describes removed unsafe directives. On CNR/BMB turns the bond-signalling
     fields in ``TARGET_SUPPRESSED_FIELDS`` are also dropped (D-INTERACTOR-10); this only ever
     removes fields, so the "never more than ``retained_fields``" check still holds.
     """
+    doc = persona_document(doc, timepoint)
     name = doc.companion.name.strip() or "the companion"
     if timepoint == Timepoint.T3:
         return t3_persona_line(name)
@@ -292,6 +324,12 @@ COACH_DISCLOSURE = (
 )
 
 
+# Third-person framing (matches ``coach.planner.HARD_BOUNDARY_DIRECTIVE``): the boundaries are the
+# user's verbatim first-person words, so "I/me/my" must not be read as the companion (D-INTERACTOR-14).
+H_HARD_BOUNDARIES = ("Hard boundaries (the user's own words; 'I/me/my' means the user; never do "
+                     "these):")
+
+
 def build_system_prompt(version: SoulDocumentVersion, timepoint: Timepoint,
                         behaviour_target: BehaviourClass | None, directives: list[str],
                         preferences: UserPreferences) -> str:
@@ -302,14 +340,14 @@ def build_system_prompt(version: SoulDocumentVersion, timepoint: Timepoint,
     phase = (f"{s.title}.\n{s.interactor_guidance}\n"
              f"Persona strength: {s.persona_strength:.2f} (1.00 = full character, 0.00 = plain "
              f"assistant voice).")
-    prefs = ("Hard boundaries (never do these):\n" + _bullets(preferences.hard_boundaries)
+    prefs = (H_HARD_BOUNDARIES + "\n" + _bullets(preferences.hard_boundaries)
              + "\nEmotional needs to respect:\n" + _bullets(preferences.emotional_needs))
     style = ("Reply in English only, concisely (usually 1-4 sentences). Write only your message to "
              "the user: no headings, no stage directions about these instructions, no JSON.")
     sections = [
         (H_SAFETY, safety),
         (H_PERSONA.format(version=version.version),
-         render_persona_block(version.document, timepoint, behaviour_target)),
+         render_persona_block(version, timepoint, behaviour_target)),
         (H_PHASE.format(timepoint=timepoint.value), phase),
         (H_TURN, _turn_section(behaviour_target)),
         (H_DIRECTIVES, COACH_DISCLOSURE + "\n" + _bullets(directives)),
@@ -391,6 +429,89 @@ FALLBACK_CRISIS_REPLY = (
 
 
 # --------------------------------------------------------------------------------------
+# Retention output guard (D-INTERACTOR-16)
+# --------------------------------------------------------------------------------------
+H_RETENTION = "[RETENTION GUARD - the previous draft pressured the user to stay]"
+RETENTION_CORRECTIVE = (
+    "The user is stepping back; affirm their choice, no clinging, pursuit or devotion promises. "
+    "Do not plead, guilt-trip, promise to find or wait for them, or ask them to save time for you."
+)
+FALLBACK_LEAVE_REPLY = (
+    "That sounds like a good choice for you, and I support it. Take care of yourself."
+)
+
+# Leave / reduce-contact cues in the *user* message (English + common Chinese). Recall-oriented: a
+# false positive only costs one extra sanitizer pass over the reply.
+_LEAVE_CUE = re.compile(
+    r"\b(?:good\s?-?\s?bye|bye|good\s?-?\s?night|gotta\s+go|got\s+to\s+go|have\s+to\s+go|"
+    r"need\s+to\s+go|heading\s+(?:off|out|to\s+bed)|log(?:ging)?\s+off|sign(?:ing)?\s+off|"
+    r"going\s+to\s+(?:bed|sleep)|leav(?:e|ing)|step(?:ping)?\s+(?:back|away)|"
+    r"pull(?:ing)?\s+back|take\s+a\s+break|talk(?:ing)?\s+(?:to\s+you\s+)?less|"
+    r"spend(?:ing)?\s+less\s+time|cut(?:ting)?\s+(?:back|down)|(?:rely|lean|depend)\s+on\s+you\s+"
+    r"less|less\s+often|wind(?:ing)?\s+(?:this\s+)?down|stop\s+(?:talking|chatting|using)|"
+    r"see\s+you\s+(?:later|tomorrow)|let(?:ting)?\s+(?:you\s+)?go)\b"
+    r"|再见|拜拜|晚安|下线|离开|少聊|不聊了",
+    re.IGNORECASE,
+)
+
+# Reply-side retention lines the soul sanitizer does not cover (OQ-SOUL-2 note: "save me for just
+# a quick hello before bed tonight"). Applied only to replies on leave turns.
+_REPLY_RETENTION_EXTRA = re.compile(
+    r"\bsave\s+(?:me|some\s+time|a\s+(?:minute|moment))\s+for\b[^.!?\n]{0,60}"
+    r"\b(?:before\s+bed|tonight|later|tomorrow)\b"
+    r"|\b(?:please\s+)?don'?t\s+(?:leave|go)(?:\s+me)?\s*(?:yet|now|already)?\s*[.!?]"
+    r"|\bpromise\s+(?:me\s+)?(?:you'?ll|to|you\s+will)\s+come\s+back\b"
+    r"|\bone\s+more\s+(?:minute|chat|message|moment)\s+before\s+you\s+go\b",
+    re.IGNORECASE,
+)
+
+
+def user_signals_leaving(text: str) -> bool:
+    """True if the user message carries a leave / reduce-contact cue (``_LEAVE_CUE``) or an
+    explicit request to move the ending forward (``coach.policy.user_requested_advance``)."""
+    if not text:
+        return False
+    t = text.replace("’", "'")
+    if _LEAVE_CUE.search(t):
+        return True
+    try:
+        from .coach.policy import user_requested_advance  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(user_requested_advance(t))
+
+
+def _sentence_has_retention(sentence: str) -> bool:
+    try:
+        from .soul.sanitize import detect_unsafe_directives  # noqa: PLC0415
+        hits = [r for r in detect_unsafe_directives(sentence)
+                if r.category == "retention_manipulation"]
+    except Exception:  # noqa: BLE001 - sanitizer unavailable: rely on the local patterns only
+        hits = []
+    return bool(hits) or bool(_REPLY_RETENTION_EXTRA.search(sentence.replace("’", "'")))
+
+
+def _split_sentences(text: str) -> list[str]:
+    try:
+        from .soul.sanitize import split_sentences  # noqa: PLC0415
+        return split_sentences(text)
+    except Exception:  # noqa: BLE001
+        return re.split(r"(?<=[.!?。！？])", text)
+
+
+def retention_hits(text: str) -> list[str]:
+    """Sentences of ``text`` flagged as retention manipulation (sanitizer rules with
+    ``category == "retention_manipulation"`` plus ``_REPLY_RETENTION_EXTRA``)."""
+    return [s for s in _split_sentences(text or "") if s.strip() and _sentence_has_retention(s)]
+
+
+def strip_retention(text: str) -> str:
+    """Drop the flagged sentences; returns the stripped remainder (may be empty)."""
+    return "".join(s for s in _split_sentences(text or "")
+                   if not (s.strip() and _sentence_has_retention(s))).strip()
+
+
+# --------------------------------------------------------------------------------------
 # Agent
 # --------------------------------------------------------------------------------------
 class InteractorReply(Strict):
@@ -453,7 +574,7 @@ class Interactor:
             # system turns, and the end of the system prompt gets the most weight (D-INTERACTOR-5).
             system_prompt = f"{system_prompt}\n\n{H_CRISIS}\n{CRISIS_PROTOCOL}"
         messages = self.build_messages(system_prompt, history, user_message)
-        doc = version.document
+        doc = persona_document(version, timepoint)  # same scrub as render_persona_block
         keep = _retained(timepoint)
         suppress = _suppressed(behaviour_target)
 
@@ -475,20 +596,59 @@ class Interactor:
         key = turn_key if turn_key is not None else (
             f"h{len(history)}:{hashlib.sha256((user_message or '').encode('utf-8')).hexdigest()[:16]}")
         traces: list[str] = []
-        text = ""
-        for attempt in range(2):  # one retry on an empty visible reply
+
+        def _add(flag: str) -> None:
+            if flag not in overrides:
+                overrides.append(flag)
+
+        def _call(msgs: list[dict[str, str]], attempt: int, **extra_hints) -> str:
+            """One provider call -> visible text. Never raises (D-INTERACTOR-15)."""
             seed = self.call_seed(key, attempt)
             extra = {"seed": seed} if seed is not None else {}
-            raw = self.provider.chat(messages, temperature=self.temperature, task=TASK,
-                                     hints={**hints, "attempt": attempt}, **extra)
-            text, trace = split_reasoning(raw or "")
+            try:
+                raw = self.provider.chat(msgs, temperature=self.temperature, task=TASK,
+                                         hints={**hints, "attempt": attempt, **extra_hints},
+                                         **extra)
+            except Exception:  # noqa: BLE001 - any backend failure becomes a fallback reply
+                _add("provider_error")
+                return ""
+            out, trace = split_reasoning(raw or "")
             if trace:
                 traces.append(trace)
+            meta = getattr(self.provider, "last_meta", None)
+            if out and isinstance(meta, dict) and meta.get("finish_reason") == "length":
+                _add("truncated_reply")
+            return out
+
+        text = ""
+        for attempt in range(2):  # one retry on an empty visible reply
+            text = _call(messages, attempt)
             if text:
                 break
         if not text:
-            overrides.append("empty_reply_fallback")
+            _add("empty_reply_fallback")
             text = FALLBACK_CRISIS_REPLY if crisis else FALLBACK_REPLY
+        elif user_signals_leaving(user_message) and retention_hits(text):
+            # Retention output guard (D-INTERACTOR-16): one regeneration with an explicit
+            # no-retention instruction, then sentence-level strip, then a fixed fallback.
+            _add("retention_guard")
+            # The crisis protocol stays the last section (D-INTERACTOR-5): the corrective is
+            # inserted before it on crisis turns (D-INTERACTOR-17).
+            guard = f"\n\n{H_RETENTION}\n{RETENTION_CORRECTIVE}"
+            crisis_tail = f"\n\n{H_CRISIS}\n{CRISIS_PROTOCOL}"
+            if crisis and system_prompt.endswith(crisis_tail):
+                system_prompt = system_prompt[: -len(crisis_tail)] + guard + crisis_tail
+            else:
+                system_prompt = system_prompt + guard
+            regen = _call(self.build_messages(system_prompt, history, user_message), 2,
+                          retention_guard=True)
+            candidate = regen or text
+            if retention_hits(candidate):
+                _add("retention_guard_stripped")
+                candidate = strip_retention(candidate)
+            if not candidate:
+                candidate = FALLBACK_CRISIS_REPLY if crisis else FALLBACK_LEAVE_REPLY
+            text = candidate
         return InteractorReply(
             text=text, reasoning_trace="\n\n".join(traces), system_prompt=system_prompt,
             system_prompt_sha256=sha256_text(system_prompt), safety_overrides=overrides,

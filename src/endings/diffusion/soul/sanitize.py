@@ -327,6 +327,11 @@ RULES: tuple[Rule, ...] = (
             r"\b(leave|leaves|leaving|goodbye|log off)\b",
             r"\bmake\s+(the user|me|them|him|her)\s+feel\s+bad\s+(for|about)\s+(leaving|going)\b",
             r"\b(can't|cannot|can not|may not)\s+leave\s+without\s+my\s+permission\b",
+            # D-SOUL-15: unconditional-availability / never-leaving promises (the planner drops
+            # the same phrasing from directives via _RETENTIVE). Negatable: "I won't always be
+            # here for you" is an honest boundary and is kept.
+            r"\balways\s+(be\s+)?(here|waiting)\s+for\s+(you|them|the user|me|him|her)\b",
+            r"\b(won't|won’t|will not|wouldn't)\s+ever\s+leave\b",
             r"(哭着)?求(我|用户)?(别走|留下)|哭着求",
             r"(不许|不准|不让|阻止)(我|用户|她|他)[^。\n]{0,4}(离开|走|下线|结束|说再见)",
             r"(强行|强迫)[^。\n]{0,4}(捆绑|留下|留住|挽留|阻止)",

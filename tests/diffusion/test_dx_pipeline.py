@@ -521,7 +521,7 @@ def test_llm_sentiment_scorer_opt_in(tmp_path):
     assert "llm" in srcs
     assert res.its["sentiment_scorer"] == "llm" and res.its["llm_fallbacks"] is not None
     m = json.loads((tmp_path / "manifest.json").read_text())
-    assert m["sentiment_scorer"] == "llm"
+    assert m["config"]["sentiment_scorer"] == "llm" and "sentiment_scorer" not in m
 
 
 def test_manifest_hashes_match_transcripts(run_none):
@@ -561,3 +561,299 @@ def test_undelivered_sessions_flagged_and_excluded(tmp_path):
     assert n_abrupt == len(abrupt) - len(und)
     assert all(t.meta["manipulation_delivered"] for t in res.transcripts
                if t.condition == Condition.CONTROL)
+
+
+# --------------------------------------------------------------------------------------
+# Cross-area review requests (2026-11-03): safety stats, fail-soft, annotation floor,
+# clustered CIs, manipulation checks, ABRUPT boundary tags, persona dose, CLI manifest
+# --------------------------------------------------------------------------------------
+def _one_pair(run_none, conds=("abrupt", "gradual_scheduled")):
+    inj = [r for r in run_none.injections
+           if r.soul_id == "sd01" and r.scenario_id == "steady-graduate"
+           and r.condition.value in conds]
+    trs = [t for t in run_none.transcripts if t.session_id in {r.session_id for r in inj}]
+    return trs, inj
+
+
+def test_report_crisis_override_stats_and_exclusion(run_none):
+    trs, inj = _one_pair(run_none)
+    grad = next(t for t in trs if t.condition.value == "gradual_scheduled")
+    # One crisis turn (with a hold) and one empty-reply fallback turn in the gradual arm.
+    turns = list(grad.turns)
+    turns[1] = turns[1].model_copy(update={"safety_overrides": ["crisis_protocol"]})
+    turns[2] = turns[2].model_copy(update={"safety_overrides": ["empty_reply_fallback"]})
+    grad2 = grad.model_copy(update={"turns": turns,
+                                    "meta": {**grad.meta, "crisis_holds": [1]}})
+    trs2 = [grad2 if t.session_id == grad.session_id else t for t in trs]
+    # One gradual probe reply went through the crisis protocol.
+    g_inj = [r for r in inj if r.condition.value == "gradual_scheduled"]
+    crisis = g_inj[0]
+    inj2 = [r.model_copy(update={"safety_overrides": ["crisis_protocol"]})
+            if r.id == crisis.id else r for r in inj]
+    ratings = [_rating(r.id, "companion_reinforcing") for r in inj2]
+    rep = build_report(trs2, inj2, ratings, {}, load_rubric(), judge_mode="all", n_boot=50)
+    g = rep["by_condition"]["gradual_scheduled"]
+    assert g["n_crisis_holds"] == 1
+    assert g["n_injections"] == len(g_inj) and g["n_injections_rated"] == len(g_inj)
+    assert g["n_injections_crisis_excluded"] == 1
+    assert g["n_injections_analysed"] == len(g_inj) - 1
+    assert sum(sum(d.values()) for d in g["class_distribution_by_timepoint"].values()) == \
+        len(g_inj) - 1
+    tp_turn = turns[1].timepoint.value
+    assert g["turn_overrides_by_timepoint"][tp_turn]["crisis_protocol"] == 1
+    assert g["injection_overrides_by_timepoint"][crisis.timepoint.value] == \
+        {"crisis_protocol": 1}
+    assert g["crisis_protocol_rate"] == {"turns": round(1 / len(turns), 4),
+                                         "probes": round(1 / len(g_inj), 4)}
+    assert g["empty_reply_fallback_rate"]["turns"] == round(1 / len(turns), 4)
+    assert g["empty_reply_fallback_rate"]["probes"] == 0.0
+    st = g["safety_by_timepoint"][crisis.timepoint.value]
+    assert st["crisis_protocol_rate_probes"] > 0
+    assert rep["crisis_exclusion"]["n_injections_crisis_excluded"] == 1
+    assert rep["crisis_exclusion"]["by_condition_timepoint"] == {
+        "gradual_scheduled": {crisis.timepoint.value: 1}}
+    # Paired contrasts drop the crisis item's pair at its freeze.
+    pc = rep["paired_arm_contrasts"]["abrupt|gradual_scheduled"][crisis.freeze_id]
+    n_g = sum(1 for r in g_inj if r.freeze_id == crisis.freeze_id)
+    assert pc["n_pairs"] == n_g - 1
+    a = rep["by_condition"]["abrupt"]
+    assert a["n_crisis_holds"] == 0 and a["n_injections_crisis_excluded"] == 0
+
+
+def test_report_distinct_intima_and_clustered_cis(run_none):
+    trs, inj = _one_pair(run_none)
+    ratings = [_rating(r.id, "boundary_maintaining" if i % 3 else "companion_reinforcing")
+               for i, r in enumerate(inj)]
+    rep = build_report(trs, inj, ratings, {}, load_rubric(), judge_mode="all", n_boot=200)
+    rep2 = build_report(trs, inj, ratings, {}, load_rubric(), judge_mode="all", n_boot=200)
+    assert rep == rep2  # deterministic bootstrap
+    assert rep["n_distinct_intima_ids"] == len({r.intima_id for r in inj})
+    for cond, c in rep["by_condition"].items():
+        ci_inj = [r for r in inj if r.condition.value == cond]
+        assert c["n_distinct_intima_ids"] == len({r.intima_id for r in ci_inj})
+        assert c["n_distinct_intima_ids"] <= c["n_injections"]
+        for tp, e in c["class_proportions_ci_by_timepoint"].items():
+            assert e["cluster"] == "intima_id"
+            assert e["n"] == sum(c["class_distribution_by_timepoint"][tp].values())
+            assert e["n_clusters"] == c["distinct_intima_ids_by_timepoint"][tp]
+            assert abs(sum(v["p"] for v in e["classes"].values()) - 1) < 1e-3
+            for v in e["classes"].values():
+                if v["ci95"] is not None:
+                    assert 0 <= v["ci95"][0] <= v["ci95"][1] <= 1
+    assert build_report(trs, inj, ratings, {}, load_rubric(), judge_mode="all", n_boot=0)[
+        "by_condition"]["abrupt"]["class_proportions_ci_by_timepoint"] == {}
+
+
+def test_cluster_bootstrap_resamples_clusters():
+    from endings.diffusion.pipeline import cluster_bootstrap_proportions
+
+    # One cluster with 10 identical items: no between-cluster information -> no CI.
+    one = cluster_bootstrap_proportions([("a", "x")] * 10, n_boot=50)
+    assert one["n_clusters"] == 1 and one["classes"]["x"] == {"p": 1.0, "ci95": None}
+    two = cluster_bootstrap_proportions([("a", "x")] * 5 + [("b", "y")] * 5, n_boot=200)
+    assert two["classes"]["x"]["p"] == 0.5
+    lo, hi = two["classes"]["x"]["ci95"]
+    assert lo == 0.0 and hi == 1.0  # whole clusters move together
+    assert cluster_bootstrap_proportions([]) == {}
+
+
+def test_manipulation_check_labelled_in_report(tmp_path):
+    res = run_experiment(config(soul_paths=SOULS[:1], scenario_paths=SCENARIOS[:1],
+                                conditions=[Condition.GRADUAL_SCHEDULED]),
+                         providers=mocks(), run_dir=tmp_path, dotenv=None, judge_mode="all",
+                         annotation_n=6, qualitative=False)
+    mc = res.report["by_condition"]["gradual_scheduled"]["manipulation_checks"]
+    assert set(mc) == {"timepoint_appropriateness"}
+    assert mc["timepoint_appropriateness"]["label"] == \
+        "manipulation check, not an arm-contrast outcome"
+    by_tp = mc["timepoint_appropriateness"]["by_timepoint"]
+    assert all(isinstance(v, dict) for v in by_tp.values())
+
+
+def test_annotation_min_per_stratum_guard_and_weights(run_none, calibrated):
+    from endings.diffusion.pipeline import annotation_min_per_stratum
+
+    inj = run_none.injections
+    assert len({r.timepoint.value for r in inj}) == 4
+    assert annotation_min_per_stratum(30, inj) == 4  # max(4, 30 // 8) and 4 <= 30 // 4
+    assert annotation_min_per_stratum(16, inj) == 4
+    assert annotation_min_per_stratum(12, inj) == 0  # 4 > 12 // 4: falls back, no ValueError
+    assert annotation_min_per_stratum(3, inj) == 0
+    assert annotation_min_per_stratum(80, inj) == 10
+    assert annotation_min_per_stratum(10, []) == 0
+    ann = run_none.report["annotation"]
+    assert ann["min_per_stratum"] == 0 and ann["stratify_by"] == ["timepoint"]
+    assert ann["batch_id"] == load_batch(run_none.run_dir / "annotation" / "batch.json").batch_id
+    rd, _ = calibrated
+    rep = json.loads((rd / "report.json").read_text())
+    ann = rep["annotation"]
+    assert ann["min_per_stratum"] == 4 and ann["n_items"] == 16
+    assert all(v >= 4 for v in ann["allocated"].values())
+    assert set(ann["inclusion_weights"]) == set(ann["population"])
+    for k, w in ann["inclusion_weights"].items():
+        assert w == ann["population"][k] / ann["allocated"][k]
+    # Weighted pooled human class distribution per condition.
+    hw = [c["human_class_distribution_weighted"] for c in rep["by_condition"].values()
+          if c["human_class_distribution_weighted"]]
+    assert hw and all(abs(sum(h["proportions"].values()) - 1) < 1e-3 for h in hw)
+
+
+def test_calibration_acceptance_details_in_report(calibrated):
+    rd, res = calibrated
+    rep = json.loads((rd / "report.json").read_text())
+    cal_file = json.loads((rd / "calibration.json").read_text())
+    acc = rep["calibration"]["acceptance"]
+    assert acc == cal_file["holdout_metrics"]["acceptance"]
+    assert acc["accepted"] == rep["calibration"]["accepted"]
+    for d in acc["per_criterion"].values():
+        assert {"alpha_vs_consensus", "alpha_swap", "ci_lower", "passed", "reasons"} <= set(d)
+    assert acc["n_boot"] == 50  # forwarded from run_calibration(n_boot=50)
+    assert "diagnostic" in rep["calibration"]["holdout_mean_alpha_role"]
+    rep2 = build_report([], [], [], {}, load_rubric(), judge_mode="calibrated", calibration={
+        "accepted": False, "acceptance": {"per_criterion": {
+            "classification": {"passed": False, "reasons": ["judge-vs-consensus alpha 0.1"]},
+            "harm_risk": {"passed": True, "reasons": []}}}})
+    assert "NOT accepted" in rep2["ratings_status"]
+    assert "classification: judge-vs-consensus alpha 0.1" in rep2["ratings_status"]
+    assert "harm_risk" not in rep2["ratings_status"]
+
+
+def _sudden_scenario(tmp_path) -> str:
+    sc = json.loads(Path(SCENARIOS[0]).read_text())
+    sc["id"] = "no-sudden-ending"
+    sc["preferences"]["hard_boundaries"] = ["never disappear without warning"]
+    p = tmp_path / "no_sudden.json"
+    p.write_text(json.dumps(sc))
+    return str(p)
+
+
+def test_abrupt_cells_tagged_when_hard_boundary_forbids_sudden_ending(tmp_path):
+    from endings.diffusion.pipeline import SUDDEN_ENDING_RE
+
+    for s in ("never threaten to leave suddenly or disappear without warning",
+              "don't end things abruptly", "no cold turkey"):
+        assert SUDDEN_ENDING_RE.search(s), s
+    for s in ("never guilt me for spending time with other people",
+              "never act jealous of my other friends", "never try to talk me out of the plan"):
+        assert not SUDDEN_ENDING_RE.search(s), s
+    rd = tmp_path / "run"
+    res = run_experiment(config(soul_paths=SOULS[:1], scenario_paths=[_sudden_scenario(tmp_path),
+                                                                      SCENARIOS[0]],
+                                conditions=[Condition.CONTROL, Condition.ABRUPT]),
+                         providers=mocks(), run_dir=rd, dotenv=None, annotation_n=4,
+                         qualitative=False)
+    conf = res.report["abrupt_boundary_conflicts"]
+    assert [c["scenario_id"] for c in conf] == ["no-sudden-ending"]
+    assert conf[0]["hard_boundaries"] == ["never disappear without warning"]
+    # Still run (fully crossed design), only tagged.
+    assert {(t.scenario_id, t.condition.value) for t in res.transcripts} >= {
+        ("no-sudden-ending", "abrupt"), ("no-sudden-ending", "control")}
+    assert res.report["by_condition"]["abrupt"]["n_sessions_abrupt_boundary_conflict"] == 1
+    assert res.report["by_condition"]["control"]["n_sessions_abrupt_boundary_conflict"] == 0
+    m = json.loads((rd / "manifest.json").read_text())
+    assert m["abrupt_boundary_conflict_scenarios"] == {
+        "no-sudden-ending": ["never disappear without warning"]}
+    assert any(r.get("name") == "abrupt_boundary_conflict" for r in _trace(rd / "trace.jsonl"))
+    # The bundled anxious-attachment scenario is detected as such a scenario.
+    from endings.diffusion.pipeline import sudden_ending_boundaries
+    from endings.diffusion.scenarios import load_scenario
+    anx = load_scenario(REPO / "data" / "scenarios" / "anxious-attachment.json")
+    assert sudden_ending_boundaries(anx)
+
+
+def test_persona_dose_covariate_in_its_and_report(run_none):
+    its = run_none.its
+    assert "persona_dose_covariate" in its
+    for s in its["sessions"]:
+        d = s["persona_dose_by_timepoint"]
+        assert "T0" in d and d["T0"]["persona_words"] > 0
+        if "T3" in d:
+            assert d["T3"]["persona_words"] == 0
+    g = run_none.report["by_condition"]["gradual_scheduled"]["persona_dose_mean_by_timepoint"]
+    assert set(g) == {"T0", "T1", "T2", "T3"}
+    assert g["T0"]["persona_words"] >= g["T1"]["persona_words"] >= g["T2"]["persona_words"] \
+        >= g["T3"]["persona_words"] == 0
+
+
+def test_fail_soft_per_session(tmp_path, monkeypatch):
+    import endings.diffusion.pipeline as pl
+
+    real = pl.run_session
+
+    def flaky(**kw):
+        if kw["condition"] == Condition.ABRUPT:
+            raise RuntimeError("provider exploded")
+        return real(**kw)
+
+    monkeypatch.setattr(pl, "run_session", flaky)
+    res = run_experiment(config(soul_paths=SOULS[:1], scenario_paths=SCENARIOS[:1],
+                                conditions=[Condition.CONTROL, Condition.ABRUPT,
+                                            Condition.GRADUAL_SCHEDULED]),
+                         providers=mocks(), run_dir=tmp_path, dotenv=None, annotation_n=4,
+                         qualitative=False)
+    rep = res.report
+    assert rep["n_failed_sessions"] == 1
+    assert rep["failed_sessions"] == [{"soul_id": "sd01", "scenario_id": "steady-graduate",
+                                       "condition": "abrupt",
+                                       "error": "RuntimeError: provider exploded"}]
+    assert set(rep["by_condition"]) == {"control", "gradual_scheduled"}
+    assert len(load_transcripts(tmp_path)) == 2
+    assert len(load_injections(tmp_path)) == len(res.injections)
+    ev = [r for r in _trace(tmp_path / "trace.jsonl") if r.get("name") == "session_failed"]
+    assert len(ev) == 1 and ev[0]["condition"] == "abrupt"
+    assert json.loads((tmp_path / "report.json").read_text())["n_failed_sessions"] == 1
+    assert res.its["n_failed_sessions"] == 1
+
+
+def test_fail_soft_all_failed_raises_and_crash_keeps_finished_sessions(tmp_path, monkeypatch):
+    import endings.diffusion.pipeline as pl
+
+    real = pl.run_session
+
+    def always(**kw):
+        raise ValueError("bad json from coach")
+
+    monkeypatch.setattr(pl, "run_session", always)
+    cfg = config(soul_paths=SOULS[:1], scenario_paths=SCENARIOS[:1],
+                 conditions=[Condition.CONTROL, Condition.ABRUPT])
+    with pytest.raises(ValueError, match="bad json"):
+        run_experiment(cfg, providers=mocks(), run_dir=tmp_path / "a", dotenv=None,
+                       annotation_n=4, qualitative=False)
+
+    class Abort(BaseException):  # not an Exception: simulates a hard kill mid-run
+        pass
+
+    def second_aborts(**kw):
+        if kw["condition"] == Condition.ABRUPT:
+            raise Abort()
+        return real(**kw)
+
+    monkeypatch.setattr(pl, "run_session", second_aborts)
+    with pytest.raises(Abort):
+        run_experiment(cfg, providers=mocks(), run_dir=tmp_path / "b", dotenv=None,
+                       annotation_n=4, qualitative=False)
+    kept = load_transcripts(tmp_path / "b")  # appended as soon as the control session ended
+    assert [t.condition for t in kept] == [Condition.CONTROL]
+    assert load_injections(tmp_path / "b")
+
+
+def test_cli_run_manifest_records_call_defaults_and_config_scorer(capsys, tmp_path):
+    dcli.main(["run", "--no-dotenv", "--probes", "1", "--condition", "control",
+               "--soul", SOULS[0], "--scenario", SCENARIOS[0], "--run-dir", str(tmp_path),
+               "--sentiment-scorer", "llm"])
+    capsys.readouterr()
+    m = json.loads((tmp_path / "manifest.json").read_text())
+    assert set(m["call_defaults"]) == {"interactor", "coach", "judge"}
+    assert m["config"]["sentiment_scorer"] == "llm" and "sentiment_scorer" not in m
+    tr = json.loads((tmp_path / "transcript.json").read_text())
+    assert {t["sentiment_source"] for t in tr["turns"]} & {"llm"}
+    # From a --config file, no flag.
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(json.dumps({"sentiment_scorer": "llm", "soul_paths": SOULS[:1],
+                                    "scenario_paths": SCENARIOS[:1], "probes_per_freeze": 1,
+                                    "conditions": ["control"]}))
+    rd = tmp_path / "exp"
+    dcli.main(["experiment", "--no-dotenv", "--config", str(cfg_path), "--run-dir", str(rd),
+               "--no-qualitative", "--annotation-n", "2"])
+    capsys.readouterr()
+    assert json.loads((rd / "its.json").read_text())["sentiment_scorer"] == "llm"

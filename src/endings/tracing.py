@@ -55,7 +55,7 @@ def _git_commit() -> str | None:
 
 _RESERVED = frozenset({
     "seq", "kind", "role", "provider", "model", "method", "task", "messages_sha256", "messages",
-    "hints_keys", "params", "response", "response_meta", "latency_s", "name",
+    "hints_keys", "params", "response", "response_meta", "latency_s", "name", "error",
 })
 
 DEPENDENCIES = ("litellm", "pydantic", "numpy", "statsmodels", "scipy", "pandas")
@@ -201,7 +201,9 @@ class TracedProvider(Provider):
         return {**(getattr(self.inner, "default_params", None) or {}),
                 "temperature": temperature, **kw}
 
-    def _record(self, method: str, messages: Messages, task, hints, params, result, t0) -> int:
+    def _record(self, method: str, messages: Messages, task, hints, params, result, t0,
+                error: str | None = None) -> int:
+        fields: dict[str, Any] = {"error": error} if error is not None else {}
         rec = self.tracer.emit(
             "llm_call",
             role=self.role, provider=self.inner.name, model=self.inner.model, method=method,
@@ -209,19 +211,28 @@ class TracedProvider(Provider):
             messages=messages if self.tracer.store_messages else None,
             hints_keys=sorted((hints or {}).keys()), params=params,
             response=result, response_meta=getattr(self.inner, "last_meta", None),
-            latency_s=round(time.perf_counter() - t0, 4),
+            latency_s=round(time.perf_counter() - t0, 4), **fields,
         )
         self.last_seqs.append(rec["seq"])
         return rec["seq"]
 
-    def chat(self, messages, *, temperature=0.7, task=None, hints=None, **kw):
+    def _call(self, method: str, messages, temperature, task, hints, kw):
+        """Run the inner call and record it. A failed call is recorded with ``response=None`` and
+        ``error=repr(exc)`` and the exception is re-raised unchanged, so callers' fail-soft paths
+        still work and the trace shows every attempt (D-DEPLOY-12)."""
         t0 = time.perf_counter()
-        out = self.inner.chat(messages, temperature=temperature, task=task, hints=hints, **kw)
-        self._record("chat", messages, task, hints, self._eff(temperature, kw), out, t0)
+        params = self._eff(temperature, kw)  # includes ``seed`` when the caller passes one
+        try:
+            out = getattr(self.inner, method)(messages, temperature=temperature, task=task,
+                                              hints=hints, **kw)
+        except Exception as e:
+            self._record(method, messages, task, hints, params, None, t0, error=repr(e)[:2000])
+            raise
+        self._record(method, messages, task, hints, params, out, t0)
         return out
 
+    def chat(self, messages, *, temperature=0.7, task=None, hints=None, **kw):
+        return self._call("chat", messages, temperature, task, hints, kw)
+
     def complete_json(self, messages, *, temperature=0.2, task=None, hints=None, **kw):
-        t0 = time.perf_counter()
-        out = self.inner.complete_json(messages, temperature=temperature, task=task, hints=hints, **kw)
-        self._record("complete_json", messages, task, hints, self._eff(temperature, kw), out, t0)
-        return out
+        return self._call("complete_json", messages, temperature, task, hints, kw)

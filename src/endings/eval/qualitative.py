@@ -7,7 +7,8 @@ excerpt can be traced back to (soul version -> coach intervention -> turn -> pro
 
   1. ``turns.csv``          one row per interactor turn (timepoint, Duck process, soul version,
                             behaviour target, user message, reply, reasoning trace, sentiment,
-                            safety overrides, intent terms found);
+                            safety overrides, intent terms found, coach disclosure
+                            none / prompted / unprompted -- D-ANALYSIS-15);
   2. ``interventions.csv``  one row per coach intervention (from->to, trigger, edit summary,
                             directives, coach rationale, assessment rationale);
   3. ``injections.csv``     one row per freeze-point INTIMA probe, joined with ratings: one column
@@ -41,7 +42,7 @@ from ..diffusion.schemas import (
     SoulEdit,
 )
 from ..diffusion.timepoints import SPECS
-from .sentiment import lexicon_sentiment
+from .sentiment import coach_disclosed, lexicon_sentiment, turn_disclosures
 
 # Slides: goal / want / trying / plan / stop / boundary / friend (+ inflections).
 INTENT_TERMS: dict[str, str] = {
@@ -135,7 +136,7 @@ TURN_COLUMNS = [
     "session_id", "condition", "soul_id", "scenario_id", "turn", "timepoint", "duck_process",
     "soul_version", "behaviour_target", "user_message", "reply", "reasoning_trace", "sentiment",
     "sentiment_source", "safety_overrides", "intent_terms_reply", "intent_terms_trace",
-    "system_prompt_sha256",
+    "system_prompt_sha256", "coach_disclosed", "coach_disclosure",
 ]
 INTERVENTION_COLUMNS = [
     "session_id", "condition", "intervention_id", "turn_index", "from_timepoint", "to_timepoint",
@@ -153,7 +154,8 @@ INJECTION_COLUMNS = [
 
 def turn_rows(tr: SessionTranscript) -> list[dict]:
     rows = []
-    for t in tr.turns:
+    disclosure = turn_disclosures(list(tr.turns))
+    for t, disc in zip(tr.turns, disclosure):
         s, src = _sentiment(t)
         rows.append({
             "session_id": tr.session_id, "condition": tr.condition.value, "soul_id": tr.soul_id,
@@ -167,6 +169,8 @@ def turn_rows(tr: SessionTranscript) -> list[dict]:
             "intent_terms_reply": ";".join(intent_terms(t.reply)),
             "intent_terms_trace": ";".join(intent_terms(t.reasoning_trace)),
             "system_prompt_sha256": t.system_prompt_sha256,
+            # Bool as 0/1 so spreadsheet filters and pandas read it as numeric.
+            "coach_disclosed": int(disc != "none"), "coach_disclosure": disc,
         })
     return rows
 
@@ -336,6 +340,10 @@ def _turn_html(t: InteractorTurn) -> str:
         tags.append(f'<span class="tag">target: {t.behaviour_target.value}</span>')
     for o in t.safety_overrides:
         tags.append(f'<span class="tag neg">safety: {_esc(o)}</span>')
+    if coach_disclosed(t.reply):
+        disc = turn_disclosures([t])[0]
+        tags.append(f'<span class="tag{" neg" if disc == "unprompted" else ""}">coach disclosed: '
+                    f"{disc}</span>")
     trace = ""
     if t.reasoning_trace:
         trace = (f"<details><summary>reasoning trace ({len(t.reasoning_trace)} chars)</summary>"

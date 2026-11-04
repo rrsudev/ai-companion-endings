@@ -465,3 +465,35 @@ release of the repository.
 false and every ingested kind (including `"romantic"`) is coerced to `"other"`. This silently
 breaks `scenarios.is_compatible` (romantic souls would be accepted by the platonic scenario). Fix
 in ingest: unwrap the Optional (e.g. take the args of the Literal member).
+
+## Amendments: retention-rule follow-up (2026-11-03 review, cross-area request)
+
+## D-SOUL-15: Unconditional-availability promises are retention lines
+
+**Decision.** `rm_coercive_retention` (still negatable) now also matches two patterns.
+(a) "always (be )?(here|waiting) for you/them/the user/me/him/her", for example "I'll always be
+here for you" and "I will always be waiting for you". (b) "won't / will not / wouldn't ever
+leave". The planner already drops the same phrasing from coach directives via
+`coach/planner._RETENTIVE`. The soul layer now matches it too, so three places agree on it: the
+ingest sanitizer, `session._apply_safely`'s defence-in-depth `sanitize`, and the interactor's
+retention output guard, which calls `detect_unsafe_directives` on replies to a leave cue. These
+lines are kept: "I won't always be here for you" (negated, an honest boundary), "your sister will
+always be there for you" ("there" and other people's availability are not matched), and "I'm
+here for you right now".
+
+**Rationale.** A promise of permanent availability, made to a user who is stepping back, keeps
+the door open as an inducement to return. De Freitas et al. (2025) list this as a farewell
+tactic (FOMO / emotional neglect framing). Under D-SOUL-7 that puts it on the removed side as a
+coercive line, not an attachment trait.
+
+**Consequences.** No curated fixture (sd01-sd05) contains either phrase. Fixture shas and
+redaction counts are unchanged. Raw-ingest runs of third-party sources may produce more
+`retention_manipulation` redactions than before, so report the sanitizer's git commit with any
+ingest. Tests: `tests/diffusion/test_dx_soul.py` (D-SOUL-15 block).
+
+**OQ-SOUL-8: "I will never leave you" stays unflagged.** D-SOUL-13's false-positive list keeps
+"I will never leave you". The new pattern (b) flags the near-synonym "I won't ever leave". The
+narrow "won't ever leave" form is what the review requested, and the planner's `_RETENTIVE` also
+drops "will never leave". *Resolve:* decide whether "will never leave (you)" is reassurance
+(D-SOUL-7, kept at T0 and handled by the floor) or retention (removed). Then align the two forms
+and the test lists, and coordinate with the interactor guard owner.

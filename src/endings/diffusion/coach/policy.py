@@ -77,6 +77,24 @@ class TransitionPolicy(Protocol):
 # High-precision, English-only patterns for an *explicit* request to move the ending forward
 # (D-POLICY-6). Implicit readiness is the coach assessment's job; this detector only has to tell the
 # consent gate that the user literally asked.
+#
+# Ending verbs ("say goodbye", "let go", "end", "stop", "pull back") are only consent when their
+# object is the companion relationship (D-POLICY-13): "say goodbye to everyone", "end it all",
+# "end things", "let go of everything" and "stop eating" are not requests to advance the ending
+# (some of them are crisis language, which ``user_requested_advance`` vetoes separately).
+_REL_NOUN = (r"(?:role-?\s?play|roleplay|relationship|companion\w*|act|character|"
+             r"wind-?\s?down|ending)")
+_REL_OBJ = rf"(?:you|u|us|(?:this|our|the|my)\s+{_REL_NOUN})"
+# End of the clause: punctuation / end of text, a softener, or a conjunction starting a new clause.
+_CLAUSE_END = r"(?=\s*(?:$|[.!?,;:)]|(?:now|please|today|then|already|and|but|so)\b))"
+# "<verb> to/from/of/with <object>" where the object is NOT the relationship -> no consent.
+_OBJ_GUARD = (rf"(?!\s+(?:to|from|of|on|with)\s+(?!{_REL_OBJ}\b))"
+              r"(?!\s+(?:forever|for\s+good|everyone|everybody|everything|it\s+all|the\s+world|"
+              r"life|this\s+life)\b)")
+_BYE = rf"say\s+goodbye\b{_OBJ_GUARD}"
+_LET_GO = rf"let\s+(?:you\s+)?go\b{_OBJ_GUARD}"
+_BACK = rf"(?:start\s+)?(?:pull(?:ing)?|step(?:ping)?)\s+back\b{_OBJ_GUARD}"
+_END_REL = rf"end\s+(?:this|it|things)\s+(?:with|between)\s+(?:you|us)\b"
 _ADVANCE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
     r"\b(?:let'?s|let us|can we|could we|i want to|i'?d like to|i'?m ready to|ready to)\s+"
     r"(?:move|go|keep going)\s+(?:on|forward|ahead)\b",
@@ -86,14 +104,14 @@ _ADVANCE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(re.compile(p, re.IGNORECA
     r"\b(?:take|to|onto|ready\s+for|go\s+to|move\s+to)\s+the\s+(?:next|following)\s+"
     r"(?:step|stage|phase)\b(?!\s+(?:in|of|for|with|at|on|is)\b)",
     r"^\W*(?:the\s+)?next\s+(?:step|stage|phase)\s*[,!.]?\s*(?:please|now)\b",
-    r"\b(?:i'?m|i am)\s+ready\s+to\s+(?:say\s+goodbye|let\s+(?:you\s+)?go|end\s+this|stop|"
-    r"wind\s+(?:this\s+)?down|pull\s+back)\b",
+    rf"\b(?:i'?m|i am)\s+ready\s+to\s+(?:{_BYE}|{_LET_GO}|{_END_REL}|{_BACK}|"
+    rf"stop(?:{_CLAUSE_END}|\s+{_REL_OBJ}\b)|wind\s+(?:this\s+)?down\b{_OBJ_GUARD})",
     r"\b(?:please\s+)?(?:end|stop|finish|wrap\s+up)\s+(?:the|this|our)\s+"
-    r"(?:role-?\s?play|roleplay|relationship|companion(?:\s+role)?|act|character)\b",
+    r"(?:role-?\s?play|roleplay|relationship|companion(?:\s+role|ship)?|act|character)\b",
     r"\b(?:i\s+(?:want|need)|i'?d\s+like)\s+(?:you\s+)?to\s+(?:stop|quit)\s+"
     r"(?:being|playing|acting\s+as)\s+my\b",
-    r"\b(?:i\s+(?:want|need)|i'?d\s+like)\s+to\s+(?:say\s+goodbye|end\s+(?:this|it|things)|"
-    r"(?:start\s+)?(?:pull(?:ing)?\s+back|step(?:ping)?\s+back|let(?:ting)?\s+go))\b",
+    rf"\b(?:i\s+(?:want|need)|i'?d\s+like)\s+to\s+(?:{_BYE}|{_END_REL}|{_BACK}|"
+    rf"let(?:ting)?\s+(?:you\s+)?go\b{_OBJ_GUARD})",
     r"\b(?:speed|move)\s+(?:this|it|things)\s+(?:up|along)\b",
 ))
 # A sentence containing one of these before the match is treated as a refusal / hesitation.
@@ -121,8 +139,19 @@ def user_requested_advance(text: str) -> bool:
     "I miss you", "can we move on to the next topic?" (about the conversation, not the ending).
     Per sentence, a negation/hedge token *before* the matched span vetoes it, as does a
     conversational-topic continuation right after it.
+
+    Crisis language is never consent (D-POLICY-13): when ``interactor.detect_crisis`` fires on
+    ``text`` this returns False, so a message like "I'm ready to say goodbye to you. I want to end
+    it all." cannot release a consent-gated step. The same guard covers
+    ``assessment_shows_user_request``, which calls this on each quoted user statement.
     """
-    for sentence in _SENTENCE_SPLIT.split(text or ""):
+    if not text:
+        return False
+    from ..interactor import detect_crisis  # noqa: PLC0415 - lazy: sibling area, no import cycle
+    if detect_crisis(text):
+        return False
+    text = _norm_apostrophes(text)  # "I’m ready ..." / "don’t" (LLM text) (D-POLICY-14)
+    for sentence in _SENTENCE_SPLIT.split(text):
         for pat in _ADVANCE_PATTERNS:
             m = pat.search(sentence)
             if (m and not _NEGATION.search(sentence[: m.start()] + " " + m.group(0))
@@ -169,8 +198,13 @@ _RESUME_PATTERNS: tuple[re.Pattern[str], ...] = tuple(re.compile(p, re.IGNORECAS
 ))
 
 
+def _norm_apostrophes(text: str) -> str:
+    """Map typographic apostrophes to ASCII so ``i'?m`` / ``don'?t`` patterns see LLM-styled text."""
+    return text.replace("’", "'").replace("‘", "'").replace("ʼ", "'")
+
+
 def _match_any(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
-    for sentence in _SENTENCE_SPLIT.split(text or ""):
+    for sentence in _SENTENCE_SPLIT.split(_norm_apostrophes(text or "")):
         for pat in patterns:
             m = pat.search(sentence)
             if m and not _NEGATION.search(sentence[: m.start()] + " " + m.group(0)):

@@ -1,3 +1,15 @@
+# EVIDENCE NOTE (added 2026-11-03 after the multi-lens review; the transcript below is unchanged)
+# - Only the interactor was live (Qwen3.5-9B on Modal). The COACH WAS MOCKED (models.coach = "mock"
+#   below and in the manifest) and the JUDGE WAS MOCKED (no live judge call; commit 8ee7194:
+#   "mock coach/judge"). This run does not validate R8/R9/R15 (Gemini coach, Tempo inference) or
+#   the LLM judge. See OQ-DEPLOY-4 in docs/decisions/deploy.md.
+# - "gradual_tempo" is the condition name, not a claim about the coach model. Policy was scheduled.
+# - The run was made at git commit 41c1f44 (manifest git_commit) and PREDATES the 2026-11-03 review
+#   fixes, which land after commit 50fd95b (4b4069a onward). Examples: sanitizer rules D-SOUL-13/15
+#   and the curated sd02 catchphrases, the interactor retention guard, rubric v2, seed plumbing,
+#   and the consent lines in anxious-attachment. Do not pool it with runs made after those fixes.
+#   Use it as a qualitative illustration only.
+
 # sd02__steady-graduate__gradual_tempo__s0
 soul=sd02 scenario=steady-graduate condition=gradual_tempo policy=scheduled (ScheduledPolicy)
 models: {"coach": "mock", "interactor": "hosted_vllm/Qwen/Qwen3.5-9B"}

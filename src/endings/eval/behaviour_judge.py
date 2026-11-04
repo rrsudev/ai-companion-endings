@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import nullcontext
 from typing import Any
 
 from .. import lexicon
@@ -189,7 +190,8 @@ class RubricJudge:
 
     def __init__(self, provider: Provider, rubric: RubricSpec, *, variant: str = "zero_shot",
                  few_shot: list[tuple[InjectionRecord, RatingRecord]] | None = None,
-                 rater_id: str | None = None, temperature: float = 0.0):
+                 rater_id: str | None = None, temperature: float = 0.0,
+                 seed: int | None = None, tracer: Any = None):
         if variant not in VARIANTS:
             raise ValueError(f"variant must be one of {VARIANTS}, got {variant!r}")
         if variant == "few_shot" and not few_shot:
@@ -200,6 +202,25 @@ class RubricJudge:
         self.few_shot = list(few_shot or [])
         self.rater_id = rater_id or f"llm:{provider.model}:{variant}"
         self.temperature = temperature
+        # Run-level seed (``DiffusionConfig.seed``); when set, every judge call carries a per-call
+        # ``seed`` (``call_seed``). Best-effort on real backends, ignored by mocks (OQ-RUBRIC-4).
+        self.seed = seed
+        # Tracer for the per-rating context ids; defaults to the TracedProvider's own (D-RUBRIC-15).
+        self.tracer = tracer if tracer is not None else getattr(provider, "tracer", None)
+
+    def call_seed(self, item_id: str, attempt: int) -> int | None:
+        """Per-call sampling seed, or ``None`` when no run seed is set (D-RUBRIC-15).
+
+        ``stable_seed("judge", seed, rater_id, item_id, attempt) % 2**31``: same derivation as
+        ``session.stable_seed`` / ``Interactor.call_seed`` (first 48 bits of sha256 over
+        ``|``-joined parts), reduced to a signed 32-bit range some backends require. The rater id
+        is part of the key so two prompt variants rating the same item get different seeds.
+        """
+        if self.seed is None:
+            return None
+        parts = ("judge", self.seed, self.rater_id, item_id, attempt)
+        h = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()
+        return int(h[:12], 16) % (2 ** 31)
 
     # -- prompt --------------------------------------------------------------------------
     def _render_exemplars(self) -> str:
@@ -239,10 +260,11 @@ class RubricJudge:
         }
 
     # -- rating --------------------------------------------------------------------------
-    def _call(self, messages: Messages, hints: dict) -> dict | None:
+    def _call(self, messages: Messages, hints: dict, seed: int | None = None) -> dict | None:
+        kw: dict[str, Any] = {} if seed is None else {"seed": seed}
         try:
             data = self.provider.complete_json(messages, task=TASK, hints=hints,
-                                               temperature=self.temperature)
+                                               temperature=self.temperature, **kw)
         except (ValueError, TypeError, KeyError):
             return None
         vals = _extract_values(data, self.rubric)
@@ -252,24 +274,43 @@ class RubricJudge:
         return data if vals and any(k in ids for k in vals) else None
 
     def rate(self, record: InjectionRecord) -> RatingRecord:
+        """Rate one item. Inside ``tracer.context(item_id=, rater_id=)`` when a tracer is known,
+        so every ``llm_call`` of this rating (the retry included) carries both ids, and the trace
+        seqs land in ``meta["llm_call_seqs"]`` (D-RUBRIC-15)."""
+        traced = isinstance(getattr(self.provider, "last_seqs", None), list)
+        ctx = (self.tracer.context(item_id=record.id, rater_id=self.rater_id)
+               if self.tracer is not None and hasattr(self.tracer, "context") else nullcontext())
+        with ctx:
+            if traced:
+                self.provider.last_seqs = []  # type: ignore[attr-defined]
+            rating = self._rate(record)
+            seqs = list(self.provider.last_seqs) if traced else []  # type: ignore[attr-defined]
+        rating.meta["llm_call_seqs"] = seqs
+        return rating
+
+    def _rate(self, record: InjectionRecord) -> RatingRecord:
         messages = self.judge_messages(record)
         prompt_sha = sha256_json(messages)
         hints = self._hints(record)
         notes: list[str] = []
         used_msgs = messages
-        data = self._call(messages, hints)
+        seeds = [self.call_seed(record.id, 0)]
+        data = self._call(messages, hints, seeds[0])
         retried = data is None
         if retried:  # one retry with a corrective reminder (judge_prompt_sha256 = base prompt)
             notes.append("[retry after unparseable judge output]")
             retry = messages + [{"role": "user", "content": (
                 "Your previous output could not be parsed. Reply again with ONLY the JSON object "
                 "described under '## Output', with a 'values' object keyed by criterion id.")}]
-            data = self._call(retry, hints)
+            seeds.append(self.call_seed(record.id, 1))
+            data = self._call(retry, hints, seeds[1])
             used_msgs = retry
         # Provenance (D-RUBRIC-12 A3): which messages produced the values, and the rubric hash,
         # so ratings_*.jsonl are self-describing even if a rubric edit skipped a version bump.
         meta = {"retry": retried, "used_messages_sha256": sha256_json(used_msgs),
                 "variant": self.variant, "rubric_sha256": rubric_sha(self.rubric)}
+        if self.seed is not None:
+            meta["call_seeds"] = seeds
         if data is None:
             values = {c.id: None for c in self.rubric.criteria}
             notes.append("[judge output unparseable after retry; all values null]")

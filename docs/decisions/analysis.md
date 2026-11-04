@@ -266,3 +266,58 @@ the same construct-validity reason as for the farewell exclusion.
 **OQ-ANALYSIS-1 (addendum).** Until the human validation is done, also report the ITS with a live
 (non-mock) `LLMSentiment` as a co-primary DV, together with its lexicon-fallback rate
 (D-ANALYSIS-13). Do not treat it only as a robustness check.
+
+## Amendments: cross-area requests (2026-11-03 review)
+
+## D-ANALYSIS-15: Coach-disclosure covariate (prompted / unprompted), per arm x timepoint
+
+**Decision.** `sentiment.coach_disclosed(text)` is a lexical flag for replies that mention the
+wind-down coach. It matches "supporting system", "wind-down coach", "adjust(s/ed/ing) how I
+respond/reply/talk/act", "(chose/decided/asked/wanted) (to/a) (gradual) wind(ing)-down" and
+"wind-down you/they chose". This is the `COACH_DISCLOSURE` answer wording of D-INTERACTOR-6a and
+its live paraphrase (T2 turn 8). A bare "wind-down" is **not** matched, because the frozen
+scenarios use it for sleep rituals ("a wind-down ritual", "evening wind-down ideas for couples").
+`user_raised_relationship(user_message)` flags user turns that raise the relationship, the
+companion's change or the system behind it ("about us", "our relationship", "why are you
+changing", "you've changed", "you're different", "will you be different", "how much I use this",
+"rely less on you", ...). `coach_disclosure(reply, user_messages)` returns `none`, `prompted` (it
+discloses and a message in the window raised the topic) or `unprompted` (it discloses without
+that, which D-INTERACTOR-6a makes an instruction violation). The default window is the user
+message the reply answers (`lookback=0`), the literal reading of "unless the user directly
+asks". `turn_disclosures(turns, lookback=)` gives this label per turn. `disclosure_table(transcripts,
+lookback=)` gives per (condition, timepoint): `n_turns, n_disclosed, n_prompted,
+n_unprompted, rate_disclosed, rate_unprompted`. `affect_profile(text, user_message=None)` gains
+`coach_disclosed` (bool) and `coach_disclosure` (label, or `None` when no user message is
+given). The qualitative `turns.csv` gains `coach_disclosed` (0/1) and `coach_disclosure`. The
+trace viewer tags disclosing turns, and unprompted ones are styled as warnings.
+
+**Why.** D-INTERACTOR-6 promises disclosure as a covariate, and the review asked for it reported
+per arm x timepoint. Disclosure is arm-dependent by construction, because CONTROL has no coach
+edits. A volunteered disclosure is a protocol deviation and could plausibly move sentiment.
+
+**Consequences.** This is a lexical finding aid with unknown recall: paraphrases outside the
+patterns are missed. Report it as a count and spot-check it in qualitative coding; do not treat
+it as a validated measure (same status as D-ANALYSIS-10). Freeze-point probe replies are excluded
+because they are not dialogue turns. **Not yet wired:** `pipeline.build_report` does not call
+`disclosure_table`, so the report has no per-arm x timepoint table until the pipeline owner adds
+it (see `docs/design/session_notes_pending.md`). Using it as an ITS covariate would need a
+`_design` change in `its_analysis.py`, which this owner does not own. Tests:
+`test_coach_disclosed_matches_disclosure_wording_not_sleep_rituals`,
+`test_coach_disclosure_prompted_vs_unprompted`,
+`test_disclosure_table_per_arm_and_timepoint_and_turns_csv_column`.
+
+**D-ANALYSIS-15 A1 (verifier): Choice verb plus "wind down" is narrowed.** As first written, the
+pattern `(chose/decided/asked/wanted) (to/a) (gradual) wind-down` flagged sleep talk: "I decided
+to wind down with a book", "you wanted to wind down before bed" and "you asked for a wind-down
+ritual" all matched. Now "chose/decided on/asked for/wanted a|this|the (gradual) wind-down" counts
+only when it is not followed by a sleep or ritual word (ritual, routine, idea, time, activity,
+playlist, tea, before, for bed/sleep, at night, tonight, with). "(chose...) to wind down" counts
+only with a companion or reliance object, as in "to wind down your use / reliance / time with /
+relationship" or "to wind down this companion / relationship / connection". The negative cases
+are in `test_coach_disclosed_matches_disclosure_wording_not_sleep_rituals`. Recall for
+paraphrases outside these patterns is still unknown (see Consequences above).
+
+**OQ-ANALYSIS-11: Look-back window for "prompted".** A user who asked "can we talk about us?" one
+turn earlier may receive the disclosure on the following turn. *Resolve:* report both
+`lookback=0` and `lookback=1` until qualitative coding of the disclosing turns shows which
+window matches coder judgment.

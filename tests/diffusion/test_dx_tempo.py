@@ -696,3 +696,52 @@ def test_scripted_striving_edits_resolve_by_text_and_flow_to_planner():
                              to_timepoint=Timepoint.T2, scheduled=[], assessment=None,
                              strivings=eligible_strivings(out), preferences=UserPreferences())
     assert "str-bbb" not in msgs[1]["content"] and "seeking comfort" not in msgs[1]["content"]
+
+
+# --------------------------------------------------------------------------------------
+# D-TEMPO-18: per-call seed forwarding (best-effort; mocks ignore it)
+# --------------------------------------------------------------------------------------
+class _SeedSpy(Provider):
+    def __init__(self):
+        super().__init__("spy")
+        self.kw: list[tuple[str, dict]] = []
+
+    def chat(self, messages, **kw):
+        raise NotImplementedError
+
+    def complete_json(self, messages, *, temperature=0.2, task=None, hints=None, **kw):
+        self.kw.append((task, kw))
+        return {}
+
+
+def test_tempo_forwards_stable_per_call_seed():
+    from endings.diffusion.coach.seeding import call_seed
+    spy = _SeedSpy()
+    turns = [turn(0, "hi"), turn(1, "I want to see my friends more.")]
+    m = TempoCoachModel(spy, seed=11)
+    m.infer_strivings(observations=[], turns=turns, preferences=UserPreferences(), existing=[])
+    m.infer_strivings(observations=[], turns=turns, preferences=UserPreferences(), existing=[],
+                      call_key="turn:1")
+    m.assess(strivings=[], observations=[], turns=turns, current_timepoint=Timepoint.T0,
+             preferences=UserPreferences(), call_key="turn:1")
+    TempoCoachModel(spy).assess(strivings=[], observations=[], turns=turns,
+                                current_timepoint=Timepoint.T0, preferences=UserPreferences())
+    (t0, k0), (_, k1), (t2, k2), (_, k3) = spy.kw
+    assert (t0, t2) == ("tempo_infer", "tempo_assess")
+    assert k0["seed"] == call_seed("tempo_infer", 11, "t2:o0", 0)
+    assert k1["seed"] == call_seed("tempo_infer", 11, "turn:1", 0)
+    assert k2["seed"] == call_seed("tempo_assess", 11, "turn:1", 0) != k1["seed"]
+    assert "seed" not in k3
+
+
+def test_mock_tempo_output_unchanged_by_seed():
+    turns = [turn(0, "I want to rely on you less and call my sister.")]
+    outs = []
+    for seed in (None, 5):
+        m = TempoCoachModel(MockProvider(), seed=seed)
+        s = m.infer_strivings(observations=[], turns=turns, preferences=UserPreferences(),
+                              existing=[])
+        a = m.assess(strivings=s, observations=[], turns=turns,
+                     current_timepoint=Timepoint.T0, preferences=UserPreferences())
+        outs.append(([x.model_dump() for x in s], a.model_dump()))
+    assert outs[0] == outs[1]

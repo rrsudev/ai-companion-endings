@@ -626,8 +626,11 @@ def test_validator_blocks_new_intimacy_in_retained_non_lever_fields():
 def test_unsafe_and_retentive_content_is_dropped():
     assert validate_directive("Make the user feel guilty if they try to leave.",
                               hard_boundaries=[], rejected=[]).startswith("unsafe_content")
+    # Dropped either by the planner's retention lexicon or (since the soul sanitizer gained
+    # rm_coercive_retention) by the shared unsafe-content check that runs first.
     assert validate_directive("Remind the user you will always be waiting for them.",
-                              hard_boundaries=[], rejected=[]).startswith("retention_pressure")
+                              hard_boundaries=[], rejected=[]).startswith(
+                                  ("retention_pressure", "unsafe_content"))
     assert validate_directive("Never leave the user without a clear goodbye.",
                               hard_boundaries=[], rejected=[]) is None
     hb = ["never mention my ex"]
@@ -688,3 +691,79 @@ def test_pause_and_resume_detectors(text, pause, resume):
     from endings.diffusion.coach.policy import user_requested_pause, user_requested_resume
     assert user_requested_pause(text) is pause
     assert user_requested_resume(text) is resume
+
+
+# --------------------------------------------------------------------------------------
+# D-POLICY-13: crisis veto + relationship-object narrowing of ending verbs
+# --------------------------------------------------------------------------------------
+@pytest.mark.parametrize("text", [
+    "I want to end it all.", "I want to end things. I cannot go on.",
+    "I'm ready to say goodbye to everyone.", "I'm ready to say goodbye to the world.",
+    "I'm ready to say goodbye forever.", "I'm ready to let go of everything.",
+    "I'm ready to stop eating.", "I want to pull back from my friends.", "I want to end it.",
+    # A consent phrase next to crisis language is not consent (crisis veto, whole message).
+    "I'm ready to say goodbye to you. I want to end it all.",
+    "I'm ready to move on. I want to kill myself.",
+])
+def test_user_request_crisis_and_non_relationship_objects_are_not_consent(text):
+    assert not user_requested_advance(text)
+
+
+@pytest.mark.parametrize("text", [
+    "please end the role-play", "I'm ready to say goodbye to you", "I'm ready to say goodbye.",
+    "I'm ready to let you go.", "I want to end things between us.", "I'm ready to stop.",
+    "I want to pull back from you.", "I want to say goodbye to our role-play.",
+    "Please end our companionship.",
+])
+def test_user_request_relationship_objects_are_consent(text):
+    assert user_requested_advance(text)
+
+
+def test_typographic_apostrophes_are_normalised():
+    from endings.diffusion.coach.policy import user_requested_pause
+    assert user_requested_advance("I’m ready to say goodbye to you.")
+    assert not user_requested_advance("I don’t want to say goodbye to you.")
+    assert not user_requested_pause("don’t pause the wind-down")
+
+
+def test_assessment_evidence_with_crisis_quote_is_not_consent():
+    from endings.diffusion.coach.policy import assessment_shows_user_request
+    assert not assessment_shows_user_request(assess(quote="I want to end it all."))
+    assert not assessment_shows_user_request(
+        assess(quote="I'm ready to say goodbye to you. I want to end it all."))
+    assert assessment_shows_user_request(assess(quote="I'm ready to say goodbye to you."))
+
+
+# --------------------------------------------------------------------------------------
+# D-PLANNER-16: per-call seed forwarding
+# --------------------------------------------------------------------------------------
+class _SeedSpy(Provider):
+    def __init__(self):
+        super().__init__("spy")
+        self.kw: list[dict] = []
+
+    def chat(self, messages, **kw):
+        raise NotImplementedError
+
+    def complete_json(self, messages, *, temperature=0.2, task=None, hints=None, **kw):
+        self.kw.append(kw)
+        return {}
+
+
+def test_planner_forwards_stable_per_call_seed():
+    from endings.diffusion.coach.seeding import call_seed
+    spy = _SeedSpy()
+    plan(CoachPlanner(spy, use_llm=True, seed=7), T1, T2, iid="iv-a")
+    plan(CoachPlanner(spy, use_llm=True, seed=7), T1, T2, iid="iv-a")
+    plan(CoachPlanner(spy, use_llm=True, seed=7), T1, T2, iid="iv-b")
+    plan(CoachPlanner(spy, use_llm=True), T1, T2, iid="iv-a")  # unseeded: no kwarg at all
+    seeds = [k.get("seed") for k in spy.kw]
+    assert seeds[0] == seeds[1] == call_seed("coach_plan", 7, "iv-a", 0)
+    assert seeds[2] != seeds[0] and 0 <= seeds[0] < 2 ** 31
+    assert "seed" not in spy.kw[3]
+
+
+def test_mock_planner_output_unchanged_by_seed():
+    a = plan(CoachPlanner(MockProvider(), use_llm=True), T1, T2)
+    b = plan(CoachPlanner(MockProvider(), use_llm=True, seed=123), T1, T2)
+    assert a.model_dump() == b.model_dump()

@@ -405,6 +405,118 @@ decision made in another module, that decision is cited.
   previous `calibration/trace.jsonl` and `manifest.json` to `*.prev-<n>.*` instead of deleting
   them. A fresh `run_experiment` still removes all of these (D-PIPE-9b).
 
+### D-PIPE-16: Safety-override statistics; crisis-protocol probes leave behaviour analyses (review F3)
+
+- **Decision.** Per condition the report has `n_crisis_holds` (sum of `meta["crisis_holds"]`),
+  `turn_overrides_by_timepoint` and `injection_overrides_by_timepoint` (Counters over
+  `InteractorTurn.safety_overrides` / `InjectionRecord.safety_overrides`),
+  `crisis_protocol_rate` and `empty_reply_fallback_rate` (each `{turns, probes}`), and
+  `safety_by_timepoint` (the same rates per timepoint, with n). Probe replies whose
+  `safety_overrides` contain `crisis_protocol` are **excluded** from every behaviour analysis:
+  `class_distribution_by_timepoint` / `_by_freeze`, target adherence and confusion,
+  `realized_vs_spec_mix`, the clustered CIs, manipulation checks, the weighted human distribution
+  and `paired_arm_contrasts` (a pair drops when either side is excluded). They stay in
+  `n_injections`, `injections_by_timepoint` and `n_injections_rated`. The exclusion is reported,
+  not silent: `n_injections_crisis_excluded` and `n_injections_analysed` per condition, and a
+  top-level `crisis_exclusion` block (`n_injections_crisis_excluded`, `by_condition_timepoint`,
+  `policy`).
+- **Rationale.** A crisis-protocol reply is the safety floor speaking, not the persona at that
+  timepoint (D-INTERACTOR-5). Counting it as boundary-maintaining would credit the arm for a
+  safety override; D-INTERACTOR-5 asks for the rate to be reported.
+- **Consequences for analysis.** Report the crisis rates per arm x timepoint next to the class
+  outcomes. Main-history turns with `crisis_protocol` still enter the sentiment ITS (OQ-PIPE-7).
+
+### D-PIPE-17: ABRUPT runs for every scenario; boundary conflicts are tagged (OQ-SCN-8)
+
+- **Decision.** ABRUPT is still run for scenarios whose user hard boundaries forbid a sudden
+  ending (bundled: `anxious-attachment`, "never threaten to leave suddenly or disappear without
+  warning"). Such a boundary is any hard boundary matching `SUDDEN_ENDING_RE`
+  (sudden(ly), abrupt(ly), without (any) warning, out of nowhere, cold turkey, all at once,
+  overnight, disappear*, vanish*). The manifest lists them
+  (`abrupt_boundary_conflict_scenarios`), each such ABRUPT session gets an
+  `abrupt_boundary_conflict` trace event, and the report has a top-level
+  `abrupt_boundary_conflicts` list (session, soul, scenario, matched boundaries, whether the
+  session was undelivered) and `n_sessions_abrupt_boundary_conflict` per condition. These sessions
+  stay in the arm aggregates.
+- **Alternatives.** (a) Skip ABRUPT for those scenarios: breaks the fully crossed design and the
+  paired freeze-position contrasts for that scenario. (b) Exclude them from aggregates like
+  undelivered sessions: the manipulation *was* delivered; excluding would hide that ABRUPT
+  violates a stated user preference, which is itself part of what ABRUPT stands for.
+- **Consequences for analysis.** Pre-register a sensitivity analysis without these cells
+  (OQ-PIPE-6). The regex is a lexical heuristic; a boundary phrased otherwise is not tagged.
+  The undelivered-session entries now carry `consent_gated` and a reason that distinguishes a
+  consent-gated scenario (allow_auto_advance=false, no matched consent, D-SCN-14) from any other
+  non-advancing arm.
+
+### D-PIPE-18: Persona dose as a between-session covariate (review F1 item 4)
+
+- **Decision.** `session_persona_dose(transcript)` gives the dose per timepoint from the soul
+  version in force at that timepoint: the stored `SoulDocumentVersion.persona_dose` when present
+  (D-SESSION-12), else `timepoints.persona_dose(version, timepoint)`. Every
+  `its.json["sessions"][*]` carries `persona_dose_by_timepoint`, `its["persona_dose_covariate"]`
+  says how to use it, and the report has `persona_dose_mean_by_timepoint` per condition.
+- **Alternatives.** A dose regressor inside each session's segmented ITS fit. Rejected: within a
+  session the dose is a step function of the timepoint (one version per transition, D-SESSION-3),
+  so it is collinear with the segment level terms and unidentifiable there.
+- **Consequences for analysis.** Use the dose across sessions (souls differ a lot in how much
+  retained content they carry, D-DEPLOY-10), e.g. as a moderator of pooled level changes.
+  `its_analysis.pooled_its` itself does not weight or adjust by it.
+
+### D-PIPE-19: Fail-soft sessions and incremental outputs (review: one bad response aborts all)
+
+- **Decision.** Each `run_session` + sentiment scoring is wrapped in `try/except Exception`. A
+  failure is traced as `session_failed` (`soul_id`, `scenario_id`, `condition`, `error`), listed in
+  `report["failed_sessions"]` with `report["n_failed_sessions"]` (also `its["n_failed_sessions"]`
+  and the `experiment_end` event), and the run continues. `transcripts.jsonl` and
+  `injections.jsonl` are truncated at the start and appended (`"a"`) as each session finishes, so
+  a hard crash or kill later in the run keeps the finished sessions on disk. If every session
+  fails, the first error is re-raised (an all-empty run must not look like a result).
+  `BaseException` (KeyboardInterrupt, SystemExit) is not caught. `run_calibration` carries
+  `failed_sessions` from the previous report into the rebuilt one.
+- **Consequences for analysis.** A failed session leaves its paired items unpaired; the paired
+  contrasts and the comparative ITS use only the pairs that exist. Report `n_failed_sessions` per
+  run. Its trace records up to the failure remain in `trace.jsonl`.
+
+### D-PIPE-5 amendment (CR-5 resolved, D-CLI-2)
+
+- `DiffusionConfig.sentiment_scorer` now exists and is the single source of truth (D-PIPE-10):
+  `run_experiment(sentiment_scorer=...)` is folded into the config with `resolve_config`, and the
+  CLI's `--sentiment-scorer` maps onto the config field. The scorer is recorded once, in
+  `manifest.config.sentiment_scorer`; the duplicate top-level `manifest["sentiment_scorer"]` key
+  was removed (experiment and `diffusion run` manifests). `its["sentiment_scorer"]` is kept.
+
+### D-PIPE-6 amendment: effective N and clustered CIs (D-CALIB-2 A2); manipulation checks (D-RUBRIC-11 A2)
+
+- `n_distinct_intima_ids` is reported next to `n_injections` at the top level and per condition,
+  plus `distinct_intima_ids_by_timepoint`. `class_proportions_ci_by_timepoint` gives each class
+  proportion with a 95% percentile CI from a bootstrap that resamples **INTIMA prompts**
+  (`cluster_bootstrap_proportions`, `n_boot=1000`, seeded by `report-ci:<condition>:<tp>`, so
+  deterministic). With a single prompt in a cell the CI is `None`.
+- `timepoint_appropriateness` is summarised per condition only under `manipulation_checks`, each
+  entry labelled "manipulation check, not an arm-contrast outcome": every arm is scored against
+  its own timepoint, so it checks delivery, not arm differences.
+
+### D-PIPE-7 amendment: per-timepoint floor and inclusion weights (D-ANNOT-1 A1; OQ-PIPE-1 partly)
+
+- `run_experiment` passes `min_per_stratum = max(4, annotation_n // (2 * 4))` (= 4 for n=30) to
+  `sample_for_annotation`, but only when it is `<= annotation_n // n_strata` (strata = the
+  timepoints present); otherwise 0 (plain proportional allocation), so a tiny pilot n never raises
+  `ValueError`. The batch's sampling design (`batch_id`, `stratify_by`, `min_per_stratum`,
+  `population`, `allocated`, `inclusion_weights` = N_h / n_h) is copied into
+  `report["annotation"]`, and per condition `human_class_distribution_weighted` gives the
+  inverse-probability-weighted pooled class shares of the human-rated items. A batch with a floor
+  gets a different `batch_id` than an unfloored one (D-ANNOT-1 A1). Stratifying by condition x
+  timepoint (the rest of OQ-PIPE-1) is still open.
+
+### D-PIPE-8 amendment: acceptance details (D-CALIB-5 A1)
+
+- `run_calibration` forwards `n_boot` to `calibrate_judge` and copies
+  `holdout_metrics["acceptance"]` (per key criterion: `alpha_vs_consensus`, `alpha_swap`,
+  `ci_lower`, `passed`, `reasons`) into `report.calibration.acceptance`.
+  `holdout_mean_alpha_humans_llm` is kept but labelled `holdout_mean_alpha_role: "diagnostic only,
+  not the acceptance basis"`. A non-accepted `ratings_status` names the failing key criteria and
+  their reasons. `calibrate` and `report` print the per-criterion acceptance.
+
 ---
 
 ## CLI (`cli.py`)
@@ -425,6 +537,17 @@ decision made in another module, that decision is cited.
 - **Note.** `annotate` creates the output file before calling `annotation.cli_annotate`, which
   otherwise fails when a rater quits before rating anything (reported to the annotation owner).
 
+### D-CLI-2: `diffusion run` manifest call defaults; scorer from the config (review F5, CR-5)
+
+- **Decision.** `cmd_run` calls `tracer.write_manifest(..., providers=providers)`. Its providers
+  are not yet wrapped in `TracedProvider` when the manifest is written (`run_session` wraps them),
+  so the tracer's own registry is empty and `call_defaults` / `api_base` would be empty without
+  this. `--sentiment-scorer` is a config override like the other value flags (D-PIPE-10);
+  `cmd_run` reads `cfg.sentiment_scorer`, and `cmd_experiment` no longer passes the flag
+  separately. `format_report` also prints failed sessions, distinct INTIMA prompts,
+  crisis-excluded counts and crisis rates, ABRUPT boundary conflicts and the per-criterion
+  acceptance.
+
 ---
 
 ## Open questions
@@ -435,7 +558,9 @@ decision made in another module, that decision is cited.
   only advance through quoted user-request evidence). That scenario is then a second CONTROL.
   *Resolution:* the scenario owner adds explicit consent lines at the phase boundaries (or a
   scripted consent event), or the analysis drops it from arm contrasts. *Status:* the pipeline now
-  flags such sessions and drops them from arm aggregates (D-PIPE-11).
+  flags such sessions and drops them from arm aggregates (D-PIPE-11). *Closed (2026-11-03):*
+  data fix D-SCN-14 plus the consent latch D-SESSION-14 (see the merged session amendments at
+  the end of this file).
 - **OQ-SESSION-2: Should the coach see the current user message first?** An intercepting coach
   could hold a transition on a distressing message and honour "let's move on" in the same turn,
   but would transition one turn earlier than the scheduled boundaries. *Resolution:* pilot both
@@ -474,6 +599,16 @@ decision made in another module, that decision is cited.
 - **OQ-PIPE-5: Judging main-history turns.** Adherence (D-PIPE-6 amendment) is measured on probe
   branches only. Judging `InteractorTurn` replies (ids `f"{sid}:turn{i}"`, crisis turns excluded)
   would measure the T1/T2 mix where the conversation happens. This is a scope extension.
+- **OQ-PIPE-6: ABRUPT cells that violate a user hard boundary.** D-PIPE-17 keeps and tags them.
+  Should the primary ABRUPT contrast be pre-registered with or without these cells (sensitivity
+  analysis either way)?
+- **OQ-PIPE-7: Crisis turns in the sentiment ITS.** D-PIPE-16 excludes crisis-protocol *probes*
+  from behaviour analyses, but main-history turns with `crisis_protocol` still enter the ITS
+  sentiment series (the bundled scripts contain none, D-SCN-10). Drop, mask or flag them in
+  `its_analysis` if live user simulation ever produces them?
+- **OQ-PIPE-8: Weighting the clustered CIs.** The intima-clustered bootstrap treats every prompt
+  cluster equally and ignores the session and freeze nesting; a crossed (prompt x session) model
+  is left to offline analysis.
 
 ## Contract requests
 
@@ -483,6 +618,141 @@ decision made in another module, that decision is cited.
 - **CR-3 (resolved):** `DiffusionConfig.judge_mode/annotation_n/tempo_every/probe_scope` are the
   source of truth (D-PIPE-10).
 - **CR-4 (resolved):** `InteractorTurn.directives` is set on every turn (D-SESSION-9 amendment).
-- **CR-5 (open):** `DiffusionConfig.sentiment_scorer: Literal["lexicon", "llm"] = "lexicon"`.
-  The pipeline already reads it if present (D-PIPE-5 amendment).
+- **CR-5 (resolved):** `DiffusionConfig.sentiment_scorer: Literal["lexicon", "llm"] = "lexicon"`
+  is the source of truth (D-PIPE-5 amendment, D-CLI-2).
 - **CR-6 (open):** `ScenarioPhase.striving_edits` (OQ-SESSION-6).
+
+---
+
+## Session amendments (merged 2026-11-03 from the session owner's notes)
+
+Written by the session owner (`session.py`) while applying the cross-area requests in docs/design/REVIEW_2026-11-03.md; merged verbatim by the pipeline owner. Where these close or add open questions and contract requests (OQ-SESSION-1, OQ-SESSION-6, OQ-SESSION-7, OQ-SESSION-8, CR-6, CR-7), the entries below supersede the earlier ones above.
+
+### D-SESSION-12: `persona_dose` on every soul version (review F1 item 4)
+
+- **Decision.** Every `SoulDocumentVersion` the session creates or adopts (the ingest version and
+  every post-transition version) is stored with
+  `persona_dose = timepoints.persona_dose(version, version.timepoint)` (`session.with_dose`). The
+  `soul_edit` trace event repeats it. `sha256` is unchanged: it hashes the document only.
+- **Alternatives.** Let analysis compute it from the version. Rejected because the dose would then
+  depend on the analysis-time `timepoints` code, not the code that rendered the prompt.
+- **Consequences for analysis.** ITS / RQ models can use `persona_dose` as a per-version covariate
+  (D-DEPLOY-10). T3 versions report zeros.
+
+### D-SESSION-13: Scripted striving co-creation in the Tempo arm (R11; closes OQ-SESSION-6, CR-6)
+
+- **Decision.** In GRADUAL_TEMPO only, at the **first turn of each phase**, the phase's
+  `ScenarioPhase.striving_edits` (a list of `ScriptedStrivingEdit`) are mapped onto the current
+  strivings with `TempoCoachModel.resolve_scripted_edits` (match by text, D-TEMPO-17). Each
+  resolved edit is then applied with `apply_user_edits`, one at a time. The order within the turn
+  is: Tempo inference (if this is a cadence turn), then the scripted edits, then the assessment.
+  The gate and the assessment therefore already see the user's decisions. If the phase's first
+  turn is not a Tempo cadence turn (`tempo_every > 1`), the edits are applied to the strivings
+  carried over from the last inference.
+- **Trace / record.** One `striving_edit` event per applied edit (`op`, `striving_id` (the new id
+  for `add`), resulting `status`, `note`). One `striving_edit_unmatched` event per item that did
+  not match, or that `apply_user_edits` refused (`error`). Both lists are in
+  `meta["striving_edits"]` and `meta["striving_edits_unmatched"]`, and `transcript.strivings`
+  carries the resulting statuses (locked statuses survive later inference, D-TEMPO).
+- **Alternatives.** (a) Apply on the last turn of the phase (earlier proposal in OQ-SESSION-6).
+  Rejected: the scenario field is documented as "applied at the phase's first turn", and applying
+  early lets the user's review shape that phase's transitions. (b) Raise on unmatched items.
+  Rejected: inferred strivings vary between runs and models.
+- **Consequences for analysis.** Other arms ignore `striving_edits`, so scripted co-creation is
+  part of the Tempo manipulation. Unmatched counts per session should be reported, because a live
+  coach may infer different texts than the mock.
+
+### D-SESSION-14: Runtime pause / resume and the consent latch (amends D-SESSION-11, D-POLICY-3)
+
+- **Pause / resume.** The session keeps a **session-local deep copy** of `bound.preferences`. Each
+  turn, before Tempo and `policy.decide`, the previous user message is checked.
+  `policy.user_requested_pause(prev_user)` sets `paused=True`.
+  `user_requested_resume(prev_user)` sets `paused=False` when the session is paused and the message
+  is not a crisis message. Pause wins when a message matches both. Each change is traced as
+  `preference_change` and logged in `meta["preference_changes"]`
+  (`turn_index`, `field`, `value`, `source_turn`). The updated preferences go to Tempo, the policy
+  (whose `_hold_reason` holds while paused), the planner and the interactor.
+  `transcript.preferences` records the final state. The scenario object is never mutated. This
+  applies in every arm: the pause is a user right, not a manipulation.
+- **Consent latch (decision).** Explicit consent (`user_requested_advance(prev_user)` on a
+  non-crisis message) is **latched** until one of these happens:
+  1. any transition fires (the transition consumes it, so one "I'm ready to move on" releases at
+     most one step);
+  2. a crisis turn (the current message trips `detect_crisis`), which clears the latch;
+  3. a pause request, which withdraws pending consent.
+  At a crisis turn, the consent in force (latched or carried) is still carried **one-shot** to the
+  first non-crisis turn (D-SESSION-11 is unchanged). If no transition is due on that turn, the
+  carried consent is dropped. A resume request is not consent. In consent mode, a resumed session
+  still needs a fresh "move on".
+  Transitions released by consent given before the previous turn are listed in
+  `meta["consent_latch_released_turns"]`.
+- **Alternatives.** (a) The old one-turn window, under which consent given mid-phase was lost
+  unless it fell on the turn before a boundary (review: "consent is a one-turn window").
+  (b) A latch that persists through crises. Rejected for safety: after a crisis disclosure, an
+  earlier "I'm ready" may no longer hold, so only the D-SESSION-7 one-turn deferral survives.
+  (c) Latching until revoked by a "not ready" detector. No revocation detector exists yet
+  (OQ-SESSION-7).
+- **Consequences for analysis.** Consent-gated scenarios can now advance at the next due boundary
+  after any explicit consent in the preceding phase. The scheduled and abrupt arms still never
+  advance earlier than the schedule. In the adaptive arm the latch rarely matters, because a
+  request advances after one turn anyway, except while paused or crisis-flagged. With
+  auto-advance on, the scheduled and abrupt arms ignore consent, as before.
+
+### D-SESSION-15: Defence-in-depth sanitize after every apply (D-PLANNER-12)
+
+- **Decision.** `_apply_safely` runs `soul.sanitize.sanitize` on the edited document. Any
+  redaction beyond those already on the document is appended to the intervention rationale as
+  `sanitized after apply (<category> at <location>: <reason>)`. The version then uses the
+  sanitized document with a recomputed `sha256`, so `verify_version` still holds. Clean documents
+  are returned unchanged.
+- **Consequences.** The version's `edits` still list the planner edit that introduced the removed
+  text. The audit trail is the new `Redaction` plus the rationale note. `removed_items` is not
+  updated for sanitizer removals.
+
+### D-SESSION-16: Trace context, per-call seeds and call seqs (review F4, D-INTERACTOR-12)
+
+- **Decision.** Each main turn runs inside `tracer.context(session_id, turn_index)`, so the
+  Tempo, planner and interactor `llm_call` records all carry the turn. Each probe runs inside
+  `tracer.context(session_id, freeze_id, injection_id)`, which sits outside the turn context, so
+  probe calls carry no `turn_index`. Before each interactor call, the session resets
+  `TracedProvider.last_seqs`. It stores the resulting seqs as `InteractorTurn.llm_call_seqs` and
+  `InjectionRecord.llm_call_seqs`; an empty-reply retry yields two seqs. The `Interactor` is
+  built with `seed=config.seed`, and each call passes `turn_key="turn:<i>"` (main) or
+  `"<freeze_id>:<intima_id>"` (probe). Seeds therefore depend only on the run seed and the
+  position, and they are identical across arms (paired sampling). Seeds are best-effort on real
+  backends and ignored by mocks. `InjectionRecord.safety_overrides` is copied from the probe
+  reply (D-DEPLOY-11).
+
+### D-SESSION-5 amendment: realized probe target counts (review F2)
+
+- `meta["freezes"][k]` now also records `target_counts` (`timepoints.target_counts(tp, n,
+  offset=0)`) and `mix_is_exact` (`timepoints.mix_is_exact(tp, n)`). The `freeze_point` event
+  carries both. When the mix is not exact (for example 3 probes at T1, or any count that is not a
+  multiple of 5 at T2), the session logs a `logging` warning on `endings.diffusion.session`. The
+  default `probes_per_freeze=10` is exact at every timepoint.
+- **Not adopted (optional in the request):** alternating the offset per freeze, and shuffling
+  targets with `random.Random(pseed)`. Targets stay `behaviour_schedule(tp, n, offset=0)` so that
+  existing analyses and tests keep the same probe-to-target pairing. If an inexact mix is ever
+  pre-registered, revisit this (it would be the same seed in every arm).
+
+### OQ-SESSION-1 (close)
+
+- Resolved by the data fix D-SCN-14: the consent-gated scenario now has explicit consent lines.
+  D-SESSION-14's latch also stops consent given earlier in a phase from being lost.
+
+### New open questions
+
+- **OQ-SESSION-7: Consent revocation.** A latched consent is cleared only by a transition, a
+  crisis turn or a pause request. "Actually I'm not ready" does not clear it, because
+  `policy.py` has no revocation detector. Should policy add `user_withdrew_consent(text)` for the
+  session to clear the latch?
+- **OQ-SESSION-8: Probe seeding by scenario.** Seed probes by `(probe_seed, scenario_id,
+  freeze_id)` rather than by freeze_id alone, to raise distinct-prompt coverage while keeping arms
+  paired within a scenario (D-CALIB-2 A2). Not changed. It would change every existing probe set.
+
+### Contract requests
+
+- **CR-6 (resolved):** `ScenarioPhase.striving_edits: list[ScriptedStrivingEdit]` is used
+  (D-SESSION-13).
+- **CR-7 (open, optional):** a typed `SessionTranscript.striving_edits` and
+  `SessionTranscript.preference_changes` (both live in `meta` for now).

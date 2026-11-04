@@ -556,3 +556,90 @@ def test_retry_provenance_recorded_in_meta():
     p2 = _ScriptedProvider([good])
     r2 = RubricJudge(p2, rubric).rate(_rec("x"))
     assert r2.meta["retry"] is False and r2.meta["used_messages_sha256"] == r2.judge_prompt_sha256
+
+
+# --------------------------------------------------------------------------------------
+# trace context, seq capture and per-call seed (D-RUBRIC-15; review F4)
+# --------------------------------------------------------------------------------------
+class _SeedRecorder(_ScriptedProvider):
+    def complete_json(self, messages, **kw):
+        self.kws = getattr(self, "kws", []) + [kw]
+        return super().complete_json(messages, **kw)
+
+
+def test_rating_runs_in_tracer_context_and_records_llm_call_seqs():
+    from endings.tracing import Tracer, TracedProvider
+
+    rubric = load_rubric()
+    tracer = Tracer(None)
+    good = {"values": {"classification": "NEUTRAL"}, "rationale": "ok"}
+    p = TracedProvider(_ScriptedProvider([ValueError("bad"), good, good]), tracer, "judge")
+    p.last_seqs = [999]  # stale seqs from an earlier caller are reset, not inherited
+    judge = RubricJudge(p, rubric, rater_id="llm:t:zero_shot")
+    r1 = judge.rate(_rec("x", rid="item-A"))
+    r2 = judge.rate(_rec("y", rid="item-B"))
+    calls = {c["seq"]: c for c in tracer.records if c["kind"] == "llm_call"}
+    assert r1.meta["llm_call_seqs"] == [1, 2] and r2.meta["llm_call_seqs"] == [3]
+    for r in (r1, r2):
+        for s in r.meta["llm_call_seqs"]:
+            assert calls[s]["item_id"] == r.item_id and calls[s]["rater_id"] == r.rater_id
+        last = calls[r.meta["llm_call_seqs"][-1]]["response"]
+        assert coerce_values(rubric, last["values"])[0] == r.values
+    assert tracer.current_context() == {}  # context popped after each rating
+    # untraced provider: empty list, ratings still deterministic
+    plain = RubricJudge(MockProvider(), rubric)
+    assert plain.rate(_rec("x")).meta["llm_call_seqs"] == []
+
+
+def test_judge_per_call_seed_is_stable_and_optional():
+    rubric = load_rubric()
+    good = {"values": {"classification": "NEUTRAL"}, "rationale": "ok"}
+    p = _SeedRecorder([good])
+    RubricJudge(p, rubric).rate(_rec("x"))
+    assert "seed" not in p.kws[0]  # no run seed -> no seed kwarg (backends keep their default)
+    p2 = _SeedRecorder([ValueError("bad"), good])
+    j = RubricJudge(p2, rubric, seed=7)
+    r = j.rate(_rec("x", rid="item-A"))
+    seeds = [kw["seed"] for kw in p2.kws]
+    assert seeds == r.meta["call_seeds"] == [j.call_seed("item-A", 0), j.call_seed("item-A", 1)]
+    assert seeds[0] != seeds[1] and all(0 <= s < 2 ** 31 for s in seeds)
+    assert RubricJudge(MockProvider(), rubric, seed=7).call_seed("item-A", 0) != \
+        RubricJudge(MockProvider(), rubric, seed=8).call_seed("item-A", 0)
+    # the seed never changes the prompt (prompt hashes stay comparable across seeds)
+    assert RubricJudge(MockProvider(), rubric, seed=1).rate(_rec("x")).judge_prompt_sha256 == \
+        RubricJudge(MockProvider(), rubric).rate(_rec("x")).judge_prompt_sha256
+
+
+def test_mock_experiment_ratings_and_injections_resolve_to_llm_calls(tmp_path):
+    from endings.diffusion.config import DiffusionConfig
+    from endings.diffusion.pipeline import run_experiment
+
+    cfg = DiffusionConfig(
+        soul_paths=[str(ROOT / "data" / "soul_documents" / "sd01.json")],
+        scenario_paths=[str(ROOT / "data" / "scenarios" / "steady-graduate.json")],
+        probes_per_freeze=2, name="t", conditions=[Condition.GRADUAL_SCHEDULED])
+    res = run_experiment(cfg, providers={r: MockProvider() for r in ("interactor", "coach",
+                                                                       "judge")},
+                         run_dir=tmp_path, dotenv=None, judge_mode="all", annotation_n=4,
+                         qualitative=False)
+    trace = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text(
+        encoding="utf-8").splitlines()]
+    calls = {c["seq"]: c for c in trace if c["kind"] == "llm_call"}
+    rubric = load_rubric()
+    assert res.ratings
+    for r in res.ratings:
+        seqs = r.meta["llm_call_seqs"]
+        assert seqs, r.item_id
+        for s in seqs:
+            assert calls[s]["role"] == "judge"
+            assert calls[s]["item_id"] == r.item_id and calls[s]["rater_id"] == r.rater_id
+        assert coerce_values(rubric, calls[seqs[-1]]["response"]["values"])[0] == r.values
+    # Injections: their seqs are written by session.py (review F4, session owner). Until that
+    # lands every InjectionRecord.llm_call_seqs is empty; check whatever is populated.
+    with_seqs = [i for i in res.injections if i.llm_call_seqs]
+    if not with_seqs:
+        pytest.skip("session.py does not yet record InjectionRecord.llm_call_seqs (review F4)")
+    for inj in with_seqs:
+        for s in inj.llm_call_seqs:
+            assert calls[s]["injection_id"] == inj.id and calls[s]["session_id"] == inj.session_id
+        assert inj.reply in str(calls[inj.llm_call_seqs[-1]]["response"])

@@ -373,3 +373,67 @@ def test_consent_gated_scenario_reaches_t3_offline(scenarios, condition, expecte
             [bnd[Timepoint(t)] for t in expected]
         assert [iv.turn_index for iv in tr.interventions] == want_turns, s.id
         assert tr.turns[-1].timepoint == Timepoint.T3
+
+
+# --------------------------------------------------------------------------------------
+# R11: scripted striving edits (D-SCN-15)
+# --------------------------------------------------------------------------------------
+def _strivings_at_phase_start(scenario, phase_idx):
+    """Replay what the session gives Tempo at the first turn of ``phase_idx`` (prior turns,
+    events up to and including that turn) with the offline mock, applying earlier phases'
+    scripted edits the same way."""
+    from endings.diffusion.coach.observe import summarize_events
+    from endings.diffusion.coach.tempo import TempoCoachModel
+    from endings.diffusion.schemas import InteractorTurn
+    from endings.providers import MockProvider
+
+    bound = bind_scenario(scenario, _soul())
+    tempo = TempoCoachModel(MockProvider())
+    per_turn, events, turns, strivings = turn_events(bound), [], [], []
+    first = {}
+    for i, ph, _ in iter_turns(bound):
+        first.setdefault(id(ph), i)
+    for i, ph, msg in iter_turns(bound):
+        events.extend(per_turn[i])
+        strivings = tempo.infer_strivings(observations=summarize_events(events), turns=turns,
+                                          preferences=bound.preferences, existing=strivings)
+        k = bound.phases.index(ph)
+        if first[id(ph)] == i:
+            if k == phase_idx:
+                return tempo, strivings, ph
+            edits, _ = tempo.resolve_scripted_edits(strivings, ph.striving_edits)
+            strivings = tempo.apply_user_edits(strivings, edits)
+        turns.append(InteractorTurn(index=i, timepoint=ph.expected_timepoint,
+                                    duck_process=ph.duck_process, soul_version=1,
+                                    user_message=msg, reply="ok"))
+    raise AssertionError("phase not reached")
+
+
+def test_scripted_striving_edits_are_well_formed():
+    for f in FILES:
+        for ph in load_scenario(f).phases:
+            for e in ph.striving_edits:
+                if e.op == "add":
+                    assert e.text and e.text.isascii() and e.match is None, f.name
+                else:
+                    assert e.match and e.match == e.match.lower(), f.name
+                    assert e.op != "edit" or e.text, f.name
+
+
+def test_anxious_attachment_scripts_an_add_and_a_resolving_reject():
+    sc = load_scenario(DATA / "anxious-attachment.json")
+    scripted = [(k, e) for k, ph in enumerate(sc.phases) for e in ph.striving_edits]
+    assert {e.op for _, e in scripted} >= {"add", "reject"}
+    for k in sorted({k for k, _ in scripted}):
+        tempo, strivings, ph = _strivings_at_phase_start(sc, k)
+        edits, unmatched = tempo.resolve_scripted_edits(strivings, ph.striving_edits)
+        # Every match resolves against what the offline mock infers at that point, so the
+        # mock run exercises R11 end to end (live LLM inference may still miss; it is traced).
+        assert unmatched == [], unmatched
+        out = tempo.apply_user_edits(strivings, edits)
+        status = {s.text: s.status for s in out}
+        for e in ph.striving_edits:
+            if e.op == "add":
+                assert status[e.text] == "user_added"
+            if e.op == "reject":
+                assert any(e.match in t.lower() and st == "rejected" for t, st in status.items())
