@@ -230,6 +230,22 @@ def cmd_annotate(args) -> None:
     print(f"{len(rs)} rating(s) by {args.rater} in {out}")
 
 
+def cmd_irr_annotate(args) -> None:
+    from ..eval.irr_viewer import serve  # noqa: PLC0415
+
+    serve(args.run_dir, rater=args.rater, host=args.host, port=args.port,
+          open_browser=not args.no_browser, judge=args.judge, blind=args.blind,
+          rubric_path=args.rubric, seed=args.seed)
+
+
+def cmd_irr_agreement(args) -> None:
+    from ..eval.irr_viewer import format_agreement, write_agreement  # noqa: PLC0415
+
+    rep, path = write_agreement(args.run_dir, n_boot=args.n_boot, seed=args.seed)
+    print(format_agreement(rep))
+    print(f"\nWrote {path}")
+
+
 def cmd_calibrate(args) -> None:
     from .pipeline import run_calibration  # noqa: PLC0415
 
@@ -379,6 +395,26 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--out", default=None)
     pa.add_argument("--rubric", default=None)
     pa.set_defaults(func=cmd_annotate)
+
+    pi = sub.add_parser("irr-annotate",
+                        help="browser annotator: realism of each run + quality of the judge")
+    pi.add_argument("--run-dir", required=True)
+    pi.add_argument("--rater", default=None, help="default: asked in the browser")
+    pi.add_argument("--judge", default=None, help="LLM rater_id to audit (default: most frequent)")
+    pi.add_argument("--blind", action="store_true",
+                    help="hide conditions, session ids and coach interventions; shuffle runs")
+    pi.add_argument("--rubric", default=None)
+    pi.add_argument("--seed", type=int, default=0, help="run-order shuffle seed (--blind)")
+    pi.add_argument("--host", default="127.0.0.1")
+    pi.add_argument("--port", type=int, default=8765)
+    pi.add_argument("--no-browser", action="store_true")
+    pi.set_defaults(func=cmd_irr_annotate)
+
+    pg = sub.add_parser("irr-agreement", help="Krippendorff's alpha across irr-annotate raters")
+    pg.add_argument("--run-dir", required=True)
+    pg.add_argument("--n-boot", type=int, default=1000)
+    pg.add_argument("--seed", type=int, default=0)
+    pg.set_defaults(func=cmd_irr_agreement)
 
     pc = sub.add_parser("calibrate", help="IRR + judge calibration from human ratings")
     pc.add_argument("--run-dir", required=True)

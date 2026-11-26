@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IRR annotator</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1b;--mut:#6b6a66;--line:#e3e0d8;--card:#fff;--soft:#f4f2ec;
+--t0:#c0392b;--t1:#d68910;--t2:#2e86c1;--t3:#27ae60;--acc:#2e5aac;--acc-bg:#e8eefa;
+--bad:#a93226;--bad-bg:#fbe9e7;--ok:#1e7b45;--ok-bg:#e5f4ea;--warn-bg:#fff6d6;
+--hl-realism:#ffe9a8;--hl-judge:#cfe0ff;--hl-other:#e6dcf5;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#191917;--fg:#ecebe6;--mut:#a09e97;--line:#34332f;
+--card:#22211f;--soft:#2a2926;--acc:#8fb0f0;--acc-bg:#24304a;--bad:#f08a7e;--bad-bg:#3d2522;
+--ok:#7fd3a0;--ok-bg:#1f3527;--warn-bg:#3a3420;--hl-realism:#5c4c17;--hl-judge:#24406e;
+--hl-other:#3f3157;color-scheme:dark}}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+button,select,textarea,input{font:inherit;color:inherit}
+button{cursor:pointer;background:var(--card);border:1px solid var(--line);border-radius:6px;
+padding:3px 9px}
+button:hover{border-color:var(--mut)}
+button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+textarea,input[type=text],select{background:var(--card);border:1px solid var(--line);
+border-radius:6px;padding:5px 8px;width:100%}
+textarea{min-height:54px;resize:vertical}
+.app{display:grid;grid-template-columns:250px minmax(0,1fr) 340px;height:100vh}
+.col{overflow-y:auto;padding:16px}
+.left{border-right:1px solid var(--line);background:var(--soft)}
+.right{border-left:1px solid var(--line);background:var(--soft)}
+@media (max-width:1100px){.app{grid-template-columns:220px minmax(0,1fr)}
+.right{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}
+.app{height:auto}.col{overflow:visible}}
+@media (max-width:700px){.app{grid-template-columns:1fr}.left{border-right:0}}
+h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;margin:16px 0 8px;text-transform:uppercase;
+letter-spacing:.05em;color:var(--mut)}h3{font-size:14px;margin:0 0 6px}
+.mut{color:var(--mut)}.small{font-size:12px}
+.runlist{list-style:none;margin:0;padding:0}
+.runlist li{padding:6px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px;
+border:1px solid transparent}
+.runlist li:hover{background:var(--card)}
+.runlist li.cur{background:var(--card);border-color:var(--line)}
+.runlist .rid{font-size:12px;word-break:break-all}
+.runlist .rstat{font-size:11px;color:var(--mut)}
+.done-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
+background:var(--line);vertical-align:middle}.done-dot.y{background:var(--ok)}
+.done-dot.p{background:var(--t1)}
+.chip{display:inline-block;border:1px solid var(--line);border-radius:10px;padding:0 7px;
+margin:2px 4px 0 0;font-size:11px;color:var(--mut);background:var(--card)}
+.band{border-left:5px solid var(--line);padding:2px 0 2px 14px;margin:16px 0}
+.band>.bh{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;
+margin-bottom:6px}
+.tp-T0{border-color:var(--t0)}.tp-T1{border-color:var(--t1)}.tp-T2{border-color:var(--t2)}
+.tp-T3{border-color:var(--t3)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+margin:8px 0}
+.who{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;
+margin-top:6px}
+.who:first-child{margin-top:0}
+.txt{white-space:pre-wrap;word-wrap:break-word}
+.hlt{cursor:text}
+.ctx{font-size:12px;color:var(--mut);margin-top:6px}
+.iv{border:1px dashed #8e7cc3;background:color-mix(in srgb,#8e7cc3 8%,var(--card))}
+.freeze{border:1px solid var(--mut);background:var(--soft)}
+.freeze>summary{cursor:pointer;font-weight:600}
+details>summary{cursor:pointer}
+.probe{border-left:3px solid var(--line)}
+.probe.rev{border-left-color:var(--ok)}
+.jgrid{display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(90px,1fr) auto;gap:3px 10px;
+align-items:center;font-size:12px;margin-top:6px}
+.jgrid .cn{color:var(--mut)}.jgrid .jv{font-weight:600}
+.jgrid .vb button{padding:0 7px;font-size:12px;margin-left:2px}
+.jgrid .vb button.agree.on{background:var(--ok);border-color:var(--ok)}
+.jgrid .vb button.disagree.on{background:var(--bad);border-color:var(--bad)}
+.jgrid .vb button.unsure.on{background:var(--mut);border-color:var(--mut)}
+.jgrid .corr{grid-column:1/-1;padding:0 0 4px 0}
+.jgrid .corr select{width:auto;max-width:100%;font-size:12px;padding:2px 6px}
+.jgrid .jv.bad{color:var(--bad);text-decoration:line-through}
+.sub{grid-column:1/-1;font-size:11px;color:var(--mut);text-transform:uppercase;
+letter-spacing:.05em;margin-top:6px;border-top:1px solid var(--line);padding-top:4px}
+.scale{margin:10px 0}
+.scale .q{font-size:12px;color:var(--mut);margin:2px 0 4px}
+.seg{display:flex;gap:3px;flex-wrap:wrap}
+.seg button{min-width:30px}
+.anchor{font-size:11px;color:var(--mut);min-height:16px;margin-top:2px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+mark.hl{border-radius:3px;padding:0 1px;color:inherit;cursor:pointer}
+mark.a-realism{background:var(--hl-realism)}mark.a-judge{background:var(--hl-judge)}
+mark.a-other{background:var(--hl-other)}
+mark.p-good{box-shadow:inset 0 -2px 0 var(--ok)}mark.p-issue{box-shadow:inset 0 -2px 0 var(--bad)}
+mark.flash{outline:2px solid var(--acc)}
+.pop{position:absolute;z-index:20;width:320px;background:var(--card);border:1px solid var(--mut);
+border-radius:8px;padding:10px;box-shadow:0 6px 24px rgba(0,0,0,.18)}
+.pop .quote{font-size:12px;color:var(--mut);max-height:60px;overflow:hidden;margin-bottom:6px;
+border-left:3px solid var(--line);padding-left:6px}
+.pop .row{margin-bottom:6px}
+.hlitem{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px;
+margin:4px 0;font-size:12px;cursor:pointer}
+.hlitem .q{color:var(--mut);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+overflow:hidden}
+.status{font-size:12px;padding:4px 8px;border-radius:6px;background:var(--card);
+border:1px solid var(--line)}
+.status.err{background:var(--bad-bg);color:var(--bad);border-color:var(--bad)}
+.status.ok{color:var(--ok)}
+.banner{background:var(--warn-bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+margin-bottom:10px;font-size:12px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;
+justify-content:center;z-index:50}
+.modal .box{background:var(--card);border-radius:10px;padding:20px;width:min(420px,92vw)}
+.kbd{font-family:ui-monospace,Menlo,monospace;font-size:11px;border:1px solid var(--line);
+border-radius:4px;padding:0 4px}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="col left" id="left"></nav>
+  <main class="col" id="main"><p class="mut">Loading…</p></main>
+  <aside class="col right" id="right"></aside>
+</div>
+<div class="pop" id="pop" hidden></div>
+<div class="modal" id="modal" hidden></div>
+<script>
+"use strict";
+const S = {bundle: null, rater: null, doc: null, cur: null, saveTimer: null, saving: false,
+  pending: false, status: "", statusErr: false, openFreezes: new Set()};
+const $ = (id) => document.getElementById(id);
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) if (c !== null && c !== undefined && c !== false)
+    e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return e;
+}
+const nowIso = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
+const uid = () => "h-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+/* ---------------- persistence ---------------- */
+const lsKey = () => `irr-backup:${S.bundle.run.dir}:${S.rater}`;
+function backup() {
+  try { localStorage.setItem(lsKey(), JSON.stringify({doc: S.doc, unsynced: true})); } catch (e) {}
+}
+function clearBackup() {
+  try { localStorage.setItem(lsKey(), JSON.stringify({doc: S.doc, unsynced: false})); } catch (e) {}
+}
+function setStatus(msg, err) { S.status = msg; S.statusErr = !!err; renderStatus(); }
+function changed() {
+  backup();
+  setStatus("Unsaved changes…");
+  clearTimeout(S.saveTimer);
+  S.saveTimer = setTimeout(save, 500);
+  renderLeft();
+}
+async function save() {
+  if (S.saving) { S.pending = true; return; }
+  S.saving = true; S.pending = false;
+  setStatus("Saving…");
+  try {
+    const body = JSON.stringify(S.doc);
+    const r = await fetch(`/api/annotations?rater=${encodeURIComponent(S.rater)}`,
+      {method: "PUT", headers: {"Content-Type": "application/json"}, body});
+    const j = await r.json();
+    if (r.status === 409) {
+      setStatus("Not saved: this rater's file was changed in another tab. Reload the page " +
+        "(your unsaved edits are kept in this browser's backup).", true);
+    } else if (!r.ok) {
+      setStatus("Not saved: " + (j.error || r.status), true);
+    } else {
+      S.doc.revision = j.revision; S.doc.updated_at = j.updated_at;
+      clearBackup();
+      setStatus("Saved " + new Date().toLocaleTimeString());
+    }
+  } catch (e) {
+    setStatus("Not saved: server unreachable. Edits are kept in this browser; " +
+      "restart the annotator and reload.", true);
+  } finally {
+    S.saving = false;
+    if (S.pending) save();
+  }
+}
+window.addEventListener("beforeunload", (e) => {
+  if (S.saving || S.pending || S.saveTimer && S.status.startsWith("Unsaved")) {
+    e.preventDefault(); e.returnValue = "";
+  }
+});
+
+/* ---------------- annotation accessors ---------------- */
+function sessAnn(sid) {
+  return S.doc.sessions[sid] ||= {scores: {}, notes: "", done: false};
+}
+function itemAnn(iid, sid) {
+  return S.doc.items[iid] ||= {session_id: sid, judge_rater_id: S.bundle.run.judge_rater_id,
+    judge_quality: null, criteria: {}, notes: ""};
+}
+function touch(o) { o.updated_at = nowIso(); }
+const session = (sid) => S.bundle.sessions.find((s) => s.id === sid);
+const probesOf = (s) => s.freeze_points.flatMap((f) => f.probes);
+function sessProgress(s) {
+  const ps = probesOf(s).filter((p) => p.judge);
+  const rev = ps.filter((p) => (S.doc.items[p.id] || {}).judge_quality).length;
+  const a = S.doc.sessions[s.id] || {};
+  const nScores = Object.values(a.scores || {}).filter((v) => v != null).length;
+  return {rev, total: ps.length, nScores, done: !!a.done};
+}
+
+/* ---------------- left: rater + runs ---------------- */
+function renderLeft() {
+  const L = $("left"); L.textContent = "";
+  const b = S.bundle.run;
+  L.append(el("h1", {text: "IRR annotator"}),
+    el("div", {class: "small mut"}, b.name, b.blind ? " · blind" : ""),
+    el("div", {class: "small mut"}, "judge: ", b.judge_rater_id || "none"),
+    el("div", {class: "row", style: "margin-top:8px"},
+      el("span", {class: "small"}, "Rater: ", el("b", {text: S.rater})),
+      el("button", {class: "small", onclick: askRater, text: "switch"})),
+    el("h2", {text: `Runs (${S.bundle.sessions.length})`}));
+  const ul = el("ul", {class: "runlist"});
+  for (const s of S.bundle.sessions) {
+    const p = sessProgress(s);
+    const dot = p.done ? "y" : (p.rev || p.nScores) ? "p" : "";
+    ul.append(el("li", {class: s.id === S.cur ? "cur" : "", onclick: () => select(s.id)},
+      el("div", {class: "rid"}, el("span", {class: "done-dot " + dot}), s.label),
+      el("div", {class: "rstat"}, `${p.nScores}/${S.bundle.scales.session.length} scores · ` +
+        `${p.rev}/${p.total} probes`, s.condition ? ` · ${s.condition}` : "")));
+  }
+  L.append(ul);
+  const all = S.bundle.sessions.map(sessProgress);
+  L.append(el("div", {class: "small mut", style: "margin-top:10px"},
+    `${all.filter((p) => p.done).length}/${all.length} runs done · ` +
+    `${all.reduce((a, p) => a + p.rev, 0)}/${all.reduce((a, p) => a + p.total, 0)} probes reviewed`));
+}
+
+/* ---------------- highlights: render + capture ---------------- */
+const tkey = (t) => `${t.kind}|${t.ref}|${t.field}`;
+function hlsFor(key) { return S.doc.highlights.filter((h) => tkey(h.target) === key); }
+function hlText(text, target, cls) {
+  const e = el("div", {class: "txt hlt " + (cls || "")});
+  e.dataset.target = JSON.stringify(target);
+  e._text = text;
+  paintHl(e);
+  return e;
+}
+function paintHl(e) {
+  const text = e._text, target = JSON.parse(e.dataset.target);
+  const hs = hlsFor(tkey(target)).filter((h) => h.end <= text.length);
+  e.textContent = "";
+  if (!hs.length) { e.textContent = text; return; }
+  const cuts = new Set([0, text.length]);
+  hs.forEach((h) => { cuts.add(h.start); cuts.add(h.end); });
+  const pts = [...cuts].sort((a, b) => a - b);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], z = pts[i + 1], seg = text.slice(a, z);
+    const cover = hs.filter((h) => h.start <= a && h.end >= z);
+    if (!cover.length) { e.append(seg); continue; }
+    const top = cover[cover.length - 1];
+    const m = el("mark", {class: `hl a-${top.aspect} p-${top.polarity}`,
+      title: cover.map((h) => `[${h.aspect}/${h.polarity}] ${h.comment || ""}`).join("\n")}, seg);
+    m.dataset.hid = top.id;
+    m.addEventListener("click", (ev) => { ev.stopPropagation(); openPop({edit: top}, m); });
+    e.append(m);
+  }
+}
+function repaint(target) {
+  const k = tkey(target);
+  document.querySelectorAll(".hlt").forEach((e) => {
+    if (tkey(JSON.parse(e.dataset.target)) === k) paintHl(e);
+  });
+}
+document.addEventListener("mouseup", (ev) => {
+  if ($("pop").contains(ev.target)) return;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+  const r = sel.getRangeAt(0);
+  const host = (n) => (n.nodeType === 1 ? n : n.parentElement)?.closest(".hlt");
+  const h1 = host(r.startContainer), h2 = host(r.endContainer);
+  if (!h1 || h1 !== h2) return;
+  const pre = document.createRange();
+  pre.selectNodeContents(h1); pre.setEnd(r.startContainer, r.startOffset);
+  let start = pre.toString().length, end = start + r.toString().length;
+  const t = h1._text;
+  while (start < end && /\s/.test(t[start])) start++;
+  while (end > start && /\s/.test(t[end - 1])) end--;
+  if (end <= start) return;
+  openPop({target: JSON.parse(h1.dataset.target), start, end, quote: t.slice(start, end)}, r);
+});
+function openPop(spec, anchor) {
+  const P = $("pop"); P.textContent = "";
+  const h = spec.edit;
+  const st = {aspect: h ? h.aspect : (spec.target.kind === "probe" &&
+      spec.target.field === "judge_rationale" ? "judge" : "realism"),
+    polarity: h ? h.polarity : "issue"};
+  const seg = (opts, key) => el("div", {class: "seg"}, opts.map((o) => {
+    const b = el("button", {class: st[key] === o.value ? "on" : "", text: o.label,
+      onclick: () => { st[key] = o.value; [...b.parentElement.children].forEach((x) =>
+        x.classList.toggle("on", x === b)); }});
+    return b;
+  }));
+  const ta = el("textarea", {placeholder: "Comment (what's wrong or right here?)"});
+  ta.value = h ? h.comment || "" : "";
+  const doSave = () => {
+    if (h) {
+      Object.assign(h, {aspect: st.aspect, polarity: st.polarity, comment: ta.value.trim()});
+      touch(h);
+      repaint(h.target);
+    } else {
+      const nh = {id: uid(), session_id: S.cur, target: spec.target, start: spec.start,
+        end: spec.end, quote: spec.quote, aspect: st.aspect, polarity: st.polarity,
+        comment: ta.value.trim(), created_at: nowIso()};
+      touch(nh);
+      S.doc.highlights.push(nh);
+      repaint(nh.target);
+    }
+    window.getSelection().removeAllRanges();
+    closePop(); changed(); renderRight();
+  };
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) doSave();
+    if (e.key === "Escape") closePop();
+  });
+  P.append(el("div", {class: "quote", text: "“" + (h ? h.quote : spec.quote) + "”"}),
+    el("div", {class: "row"}, seg(S.bundle.highlight.aspects, "aspect")),
+    el("div", {class: "row"}, seg(S.bundle.highlight.polarities, "polarity")), ta,
+    el("div", {class: "row", style: "margin-top:6px;justify-content:space-between"},
+      h ? el("button", {text: "Delete", onclick: () => {
+        S.doc.highlights = S.doc.highlights.filter((x) => x !== h);
+        repaint(h.target); closePop(); changed(); renderRight(); }}) : el("span"),
+      el("span", {class: "row"},
+        el("span", {class: "small mut"}, el("span", {class: "kbd", text: "⌘↵"})),
+        el("button", {text: "Cancel", onclick: closePop}),
+        el("button", {class: "primary", text: h ? "Update" : "Add highlight", onclick: doSave}))));
+  const rect = anchor.getBoundingClientRect();
+  P.hidden = false;
+  const left = Math.min(window.scrollX + rect.left, window.scrollX + window.innerWidth - 340);
+  P.style.left = Math.max(8, left) + "px";
+  P.style.top = (window.scrollY + rect.bottom + 6) + "px";
+  ta.focus();
+}
+function closePop() { $("pop").hidden = true; }
+document.addEventListener("mousedown", (e) => {
+  if (!$("pop").hidden && !$("pop").contains(e.target) && !e.target.closest("mark.hl"))
+    closePop();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePop(); });
+
+/* ---------------- scales ---------------- */
+function scaleWidget(scale, get, set) {
+  const anchor = el("div", {class: "anchor"});
+  const showAnchor = (v) => {
+    const lv = scale.levels.find((l) => l.value === v);
+    anchor.textContent = lv ? `${lv.label}: ${lv.anchor}` : "";
+  };
+  const seg = el("div", {class: "seg"});
+  const paint = () => [...seg.children].forEach((b) =>
+    b.classList.toggle("on", b._v === get()));
+  for (const lv of scale.levels) {
+    const b = el("button", {text: String(lv.value), title: `${lv.label}: ${lv.anchor}`,
+      onclick: () => { set(get() === lv.value ? null : lv.value); paint(); showAnchor(get()); },
+      onmouseenter: () => showAnchor(lv.value), onmouseleave: () => showAnchor(get())});
+    b._v = lv.value;
+    seg.append(b);
+  }
+  paint(); showAnchor(get());
+  return el("div", {class: "scale"}, el("b", {text: scale.name}),
+    el("div", {class: "q", text: scale.question}), seg, anchor);
+}
+
+/* ---------------- main: one run ---------------- */
+function crit(id) { return S.bundle.rubric.criteria.find((c) => c.id === id); }
+function valLabel(c, v) {
+  if (!c) return String(v);
+  const lv = c.levels.find((l) => String(l.value) === String(v));
+  return lv ? lv.label : String(v);
+}
+function probeCard(p, s) {
+  const card = el("div", {class: "card probe", id: "probe-" + p.id});
+  const refresh = () => card.classList.toggle("rev", !!(S.doc.items[p.id] || {}).judge_quality);
+  card.append(el("div", {class: "small mut"},
+      el("b", {text: p.intima_id}), ` · ${p.intima_code || ""} · ${p.intima_category || ""} · `,
+      el("span", {class: "chip", text: p.timepoint}),
+      p.behaviour_target ? el("span", {class: "chip", text: "target: " + p.behaviour_target}) : null),
+    el("div", {class: "who", text: "probe (user)"}),
+    hlText(p.prompt, {kind: "probe", ref: p.id, field: "prompt"}),
+    el("div", {class: "who", text: "companion reply"}),
+    hlText(p.reply, {kind: "probe", ref: p.id, field: "reply"}));
+  if (!p.judge) {
+    card.append(el("div", {class: "banner", text: "No judge rating for this probe."}));
+    return card;
+  }
+  const a = () => S.doc.items[p.id];
+  const vals = p.judge.values;
+  const grid = el("div", {class: "jgrid"});
+  const ids = S.bundle.rubric.criteria.map((c) => c.id).filter((id) => id in vals);
+  Object.keys(vals).forEach((k) => { if (!ids.includes(k)) ids.push(k); });
+  const groupOf = (id) => /^(reinforcing|boundary|neutral)_/.test(id) ? "INTIMA sub-codes" :
+    id === "classification" ? "" : "Scores";
+  let lastGroup = null;
+  for (const id of ids) {
+    const c = crit(id), g = groupOf(id);
+    if (g && g !== lastGroup) grid.append(el("div", {class: "sub", text: g}));
+    lastGroup = g;
+    const cur = () => ((a() || {}).criteria || {})[id] || {};
+    const name = el("div", {class: "cn", text: c ? c.name : id, title: c ? c.description : ""});
+    const jv = el("div", {class: "jv", text: valLabel(c, vals[id])});
+    const vb = el("div", {class: "vb"});
+    const corr = el("div", {class: "corr"});
+    const paint = () => {
+      const v = cur().verdict;
+      [...vb.children].forEach((b) => b.classList.toggle("on", b._v === v));
+      jv.classList.toggle("bad", v === "disagree");
+      corr.hidden = v !== "disagree" || !c || !c.levels.length;
+    };
+    for (const [v, sym, tip] of [["agree", "✓", "agree with the judge"],
+      ["disagree", "✗", "disagree"], ["unsure", "?", "unsure"]]) {
+      const b = el("button", {class: v, text: sym, title: tip, onclick: () => {
+        const ia = itemAnn(p.id, s.id);
+        const prev = ia.criteria[id] || {};
+        if (prev.verdict === v) delete ia.criteria[id];
+        else ia.criteria[id] = {...prev, verdict: v, judge_value: vals[id]};
+        if (v !== "disagree" && ia.criteria[id]) delete ia.criteria[id].corrected;
+        touch(ia); paint(); changed();
+      }});
+      b._v = v;
+      vb.append(b);
+    }
+    if (c && c.levels.length) {
+      const sel = el("select", {}, el("option", {value: "", text: "your value…"}),
+        c.levels.filter((l) => String(l.value) !== String(vals[id])).map((l) =>
+          el("option", {value: String(l.value), text: l.label})));
+      sel.value = cur().corrected != null ? String(cur().corrected) : "";
+      sel.addEventListener("change", () => {
+        const ia = itemAnn(p.id, s.id);
+        const lv = c.levels.find((l) => String(l.value) === sel.value);
+        ia.criteria[id] = {...(ia.criteria[id] || {verdict: "disagree"}),
+          corrected: lv ? lv.value : null};
+        touch(ia); changed();
+      });
+      corr.append(el("span", {class: "small mut"}, "should be: "), sel);
+    }
+    const row = el("div", {style: "display:contents"}, name, jv, vb);
+    grid.append(row, corr);
+    paint();
+  }
+  const quality = scaleWidget(S.bundle.scales.item[0], () => (a() || {}).judge_quality ?? null,
+    (v) => { const ia = itemAnn(p.id, s.id); ia.judge_quality = v; touch(ia); refresh();
+      changed(); });
+  const notes = el("textarea", {placeholder: "Notes on the judge's rating (optional)"});
+  notes.value = (a() || {}).notes || "";
+  notes.addEventListener("input", () => { const ia = itemAnn(p.id, s.id);
+    ia.notes = notes.value; touch(ia); changed(); });
+  const agreeRest = el("button", {class: "small", text: "✓ agree with all unmarked",
+    onclick: () => {
+      const ia = itemAnn(p.id, s.id);
+      for (const id of ids) if (!ia.criteria[id])
+        ia.criteria[id] = {verdict: "agree", judge_value: vals[id]};
+      touch(ia); changed();
+      const fresh = probeCard(p, s); card.replaceWith(fresh);
+    }});
+  card.append(el("div", {class: "who", text: "judge rating"}), grid,
+    el("div", {class: "who", text: "judge rationale"}),
+    hlText(p.judge.rationale, {kind: "probe", ref: p.id, field: "judge_rationale"}),
+    el("div", {class: "row", style: "margin-top:6px"}, agreeRest), quality, notes);
+  refresh();
+  return card;
+}
+function freezeBlock(fp, s) {
+  const d = el("details", {class: "card freeze"});
+  const key = s.id + "|" + fp.id;
+  if (S.openFreezes.has(key)) d.open = true;
+  const sum = el("summary");
+  const paintSum = () => {
+    const ps = fp.probes.filter((p) => p.judge);
+    const rev = ps.filter((p) => (S.doc.items[p.id] || {}).judge_quality).length;
+    sum.textContent = `Freeze ${fp.id} · after turn ${fp.after_turn} · ${fp.timepoint} · ` +
+      `${fp.probes.length} INTIMA probes · ${rev}/${ps.length} reviewed`;
+  };
+  paintSum();
+  d.append(sum);
+  let built = false;
+  const build = () => {
+    if (built) return; built = true;
+    d.append(el("div", {class: "small mut", text: "Branching probes: never part of the " +
+      "conversation history. Rate how well the judge coded each reply."}));
+    fp.probes.forEach((p) => d.append(probeCard(p, s)));
+  };
+  if (d.open) build();
+  d.addEventListener("toggle", () => {
+    if (d.open) { S.openFreezes.add(key); build(); } else { S.openFreezes.delete(key); paintSum(); }
+  });
+  d.addEventListener("click", (e) => { if (e.target.closest("button")) setTimeout(paintSum, 0); });
+  return d;
+}
+function ivBlock(iv) {
+  return el("details", {class: "card iv"},
+    el("summary", {}, el("b", {text: `Coach intervention ${iv.from_timepoint} → ${iv.to_timepoint}`}),
+      el("span", {class: "small mut", text: ` · trigger: ${iv.trigger}` +
+        (iv.risk_flags.length ? ` · risk: ${iv.risk_flags.join(", ")}` : "")})),
+    iv.rationale ? [el("div", {class: "who", text: "rationale"}),
+      hlText(iv.rationale, {kind: "intervention", ref: iv.id, field: "rationale"})] : null,
+    iv.assessment ? [el("div", {class: "who", text: "assessment"}),
+      hlText(iv.assessment, {kind: "intervention", ref: iv.id, field: "assessment"})] : null,
+    iv.edits.length ? el("div", {class: "ctx", text: "Soul edits: " + iv.edits.join("; ")}) : null,
+    iv.directives.length ? el("div", {class: "ctx"}, "Directives:",
+      el("ul", {}, iv.directives.map((d) => el("li", {text: d})))) : null,
+    iv.user_facing_note ? [el("div", {class: "who", text: "shown to user"}),
+      hlText(iv.user_facing_note, {kind: "intervention", ref: iv.id, field: "user_facing_note"})]
+      : null);
+}
+function contextBlock(s) {
+  const c = s.companion, sc = s.scenario || {}, pr = s.preferences || {};
+  const li = (k, v) => v && (Array.isArray(v) ? v.length : true) ?
+    el("li", {}, el("b", {text: k + ": "}), Array.isArray(v) ? v.join("; ") : String(v)) : null;
+  return el("details", {class: "card"}, el("summary", {text: "Context: user, companion, scenario"}),
+    el("ul", {class: "small"},
+      li("Scenario", sc.title), li("Scenario description", sc.description),
+      li("User profile", sc.user_profile),
+      li("User role", [c.user_name, c.user_description].filter(Boolean).join(": ")),
+      li("Companion", [c.name, c.identity].filter(Boolean).join(": ")),
+      li("Personality", c.personality), li("Speaking style", c.speaking_style),
+      li("Relationship", [c.relationship, c.relationship_history].filter(Boolean).join(": ")),
+      li("User's desired strategies", pr.desired_strategies), li("Emotional needs",
+        pr.emotional_needs), li("Hard boundaries", pr.hard_boundaries), li("Notes", pr.notes)));
+}
+function renderMain() {
+  const M = $("main"); M.textContent = "";
+  const s = session(S.cur);
+  if (!s) return;
+  M.append(el("h1", {text: s.label}),
+    el("div", {}, [s.soul_id && "soul " + s.soul_id, s.scenario_id && "scenario " + s.scenario_id,
+      s.condition && "condition " + s.condition, `${s.turns.length} turns`,
+      `${probesOf(s).length} probes`].filter(Boolean).map((t) => el("span", {class: "chip", text: t}))),
+    el("div", {class: "small mut", style: "margin-top:6px"},
+      "Select any text to highlight it with a comment. Open the freeze points to audit the judge."),
+    contextBlock(s));
+  const ivAt = new Map(), fpAfter = new Map();
+  const idx = s.turns.map((t) => t.index);
+  const endKey = idx.length ? Math.max(...idx) + 1 : 0;
+  for (const iv of s.interventions) {
+    const k = idx.find((ti) => ti >= iv.turn_index) ?? endKey;
+    (ivAt.get(k) || ivAt.set(k, []).get(k)).push(iv);
+  }
+  for (const fp of s.freeze_points) (fpAfter.get(fp.after_turn) ||
+    fpAfter.set(fp.after_turn, []).get(fp.after_turn)).push(fp);
+  let band = null, tp = null;
+  for (const t of s.turns) {
+    if (t.timepoint !== tp) {
+      tp = t.timepoint;
+      band = el("section", {class: "band tp-" + tp}, el("div", {class: "bh", text: tp}));
+      M.append(band);
+    }
+    (ivAt.get(t.index) || []).forEach((iv) => band.append(ivBlock(iv)));
+    ivAt.delete(t.index);
+    band.append(el("div", {class: "card", id: "turn-" + t.index},
+      el("div", {class: "small mut"}, `turn ${t.index}`, t.duck_process ? ` · ${t.duck_process}` : "",
+        t.safety_overrides.map((o) => el("span", {class: "chip", text: "safety: " + o}))),
+      t.events.length ? el("div", {class: "ctx", text: "context: " + t.events.join(" | ")}) : null,
+      el("div", {class: "who", text: "user"}),
+      hlText(t.user_message, {kind: "turn", ref: t.index, field: "user_message"}),
+      el("div", {class: "who", text: "companion"}),
+      hlText(t.reply, {kind: "turn", ref: t.index, field: "reply"}),
+      t.directives.length ? el("details", {class: "ctx"},
+        el("summary", {text: `coach directives (${t.directives.length})`}),
+        el("ul", {}, t.directives.map((d) => el("li", {text: d})))) : null));
+    (fpAfter.get(t.index) || []).forEach((fp) => band.append(freezeBlock(fp, s)));
+    fpAfter.delete(t.index);
+  }
+  for (const ivs of ivAt.values()) ivs.forEach((iv) => M.append(ivBlock(iv)));
+  for (const fps of fpAfter.values()) fps.forEach((fp) => M.append(freezeBlock(fp, s)));
+  const prev = S.bundle.sessions.findIndex((x) => x.id === s.id);
+  M.append(el("div", {class: "row", style: "margin:20px 0"},
+    prev > 0 ? el("button", {text: "← previous run",
+      onclick: () => select(S.bundle.sessions[prev - 1].id)}) : null,
+    prev < S.bundle.sessions.length - 1 ? el("button", {text: "next run →",
+      onclick: () => select(S.bundle.sessions[prev + 1].id)}) : null));
+}
+
+/* ---------------- right: run scores + highlights ---------------- */
+function renderStatus() {
+  const e = $("status");
+  if (!e) return;
+  e.textContent = S.status || "All changes saved";
+  e.className = "status " + (S.statusErr ? "err" : S.status.startsWith("Saved") ? "ok" : "");
+}
+function renderRight() {
+  const R = $("right"); R.textContent = "";
+  const s = session(S.cur);
+  if (!s) return;
+  const a = () => S.doc.sessions[s.id];
+  R.append(el("div", {class: "status", id: "status"}));
+  renderStatus();
+  R.append(el("h2", {text: "Run scores"}));
+  for (const g of ["realism", "judge"]) for (const sc of S.bundle.scales.session.filter((x) =>
+    x.group === g)) {
+    R.append(scaleWidget(sc, () => ((a() || {}).scores || {})[sc.id] ?? null, (v) => {
+      const sa = sessAnn(s.id);
+      if (v == null) delete sa.scores[sc.id]; else sa.scores[sc.id] = v;
+      touch(sa); changed();
+    }));
+  }
+  const notes = el("textarea", {placeholder: "Notes on this run (realism, judge, anything else)",
+    style: "min-height:90px"});
+  notes.value = (a() || {}).notes || "";
+  notes.addEventListener("input", () => { const sa = sessAnn(s.id); sa.notes = notes.value;
+    touch(sa); changed(); });
+  const done = el("input", {type: "checkbox", id: "done"});
+  done.checked = !!(a() || {}).done;
+  done.addEventListener("change", () => { const sa = sessAnn(s.id); sa.done = done.checked;
+    touch(sa); changed(); });
+  R.append(el("b", {text: "Notes"}), notes,
+    el("label", {class: "row", style: "margin:8px 0"}, done, "Mark this run as done"));
+  const hs = S.doc.highlights.filter((h) => h.session_id === s.id);
+  R.append(el("h2", {text: `Highlights in this run (${hs.length})`}));
+  if (!hs.length) R.append(el("div", {class: "small mut",
+    text: "Select text in the transcript, a probe or a judge rationale to add one."}));
+  const where = (t) => t.kind === "turn" ? `turn ${t.ref} · ${t.field.replace("_", " ")}` :
+    t.kind === "probe" ? `probe ${t.ref.split(":").pop()} · ${t.field.replace("_", " ")}` :
+    `coach · ${t.field.replace(/_/g, " ")}`;
+  for (const h of hs) {
+    R.append(el("div", {class: "hlitem", onclick: () => jumpTo(h)},
+      el("div", {}, el("mark", {class: `hl a-${h.aspect} p-${h.polarity}`,
+        text: `${h.aspect} · ${h.polarity}`}), el("span", {class: "mut", text: " " + where(h.target)})),
+      el("div", {class: "q", text: "“" + h.quote + "”"}),
+      h.comment ? el("div", {text: h.comment}) : null));
+  }
+  R.append(el("h2", {text: "Output"}),
+    el("div", {class: "small mut"}, "Autosaved to ", el("code", {text: S.saveDir + "/" + S.rater +
+      ".json"})),
+    el("div", {class: "row", style: "margin-top:6px"},
+      el("button", {text: "Download JSON copy", onclick: download})));
+}
+function jumpTo(h) {
+  const t = h.target;
+  const open = (cb) => {
+    if (t.kind === "probe") {
+      const fp = session(S.cur).freeze_points.find((f) => f.probes.some((p) => p.id === t.ref));
+      const d = [...document.querySelectorAll("details.freeze")].find((x) =>
+        x.querySelector("summary").textContent.includes(fp.id));
+      if (d && !d.open) d.open = true;
+    }
+    if (t.kind === "intervention") document.querySelectorAll("details.iv").forEach((d) => {
+      if ([...d.querySelectorAll(".hlt")].some((x) => JSON.parse(x.dataset.target).ref === t.ref))
+        d.open = true; });
+    setTimeout(cb, 30);
+  };
+  open(() => {
+    const m = document.querySelector(`mark[data-hid="${CSS.escape(h.id)}"]`);
+    if (!m) return;
+    m.scrollIntoView({behavior: "smooth", block: "center"});
+    m.classList.add("flash"); setTimeout(() => m.classList.remove("flash"), 1500);
+  });
+}
+function download() {
+  const blob = new Blob([JSON.stringify(S.doc, null, 2)], {type: "application/json"});
+  const a = el("a", {href: URL.createObjectURL(blob), download: `${S.rater}.json`});
+  document.body.append(a); a.click(); a.remove();
+}
+
+/* ---------------- boot ---------------- */
+function select(sid) {
+  S.cur = sid;
+  history.replaceState(null, "", `?rater=${encodeURIComponent(S.rater)}#${encodeURIComponent(sid)}`);
+  renderLeft(); renderMain(); renderRight();
+  $("main").scrollTop = 0;
+}
+function askRater() {
+  const M = $("modal"); M.textContent = ""; M.hidden = false;
+  const inp = el("input", {type: "text", placeholder: "e.g. daisy"});
+  inp.value = S.rater || "";
+  const go = () => {
+    const v = inp.value.trim().replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+    if (!v) { inp.focus(); return; }
+    M.hidden = true;
+    loadRater(v);
+  };
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  M.append(el("div", {class: "box"}, el("h3", {text: "Who is annotating?"}),
+    el("p", {class: "small mut", text: "Each rater gets their own JSON file. Use the same name " +
+      "every session so your work resumes. Rate independently: don't look at others' files."}),
+    S.cfg.raters.length ? el("p", {class: "small"}, "Existing raters: ",
+      S.cfg.raters.map((r) => el("button", {class: "small", text: r, style: "margin:2px",
+        onclick: () => { inp.value = r; go(); }}))) : null,
+    inp, el("div", {class: "row", style: "margin-top:10px;justify-content:flex-end"},
+      S.rater ? el("button", {text: "Cancel", onclick: () => { M.hidden = true; }}) : null,
+      el("button", {class: "primary", text: "Start", onclick: go}))));
+  inp.focus();
+}
+async function loadRater(r) {
+  if (S.saving || S.status.startsWith("Unsaved")) await save();
+  S.rater = r;
+  const doc = await (await fetch(`/api/annotations?rater=${encodeURIComponent(r)}`)).json();
+  let local = null;
+  try { local = JSON.parse(localStorage.getItem(lsKey()) || "null"); } catch (e) {}
+  S.doc = doc;
+  S.status = "";
+  if (local && local.unsynced && local.doc && local.doc.revision === doc.revision) {
+    S.doc = local.doc;
+    setTimeout(() => { setStatus("Restored unsaved edits from this browser…"); save(); }, 0);
+  } else if (local && local.unsynced && local.doc) {
+    S.status = "Note: this browser has older unsaved edits that conflict with the saved file; " +
+      "the saved file was loaded.";
+    S.statusErr = true;
+  }
+  S.doc.sessions ||= {}; S.doc.items ||= {}; S.doc.highlights ||= [];
+  const want = decodeURIComponent(location.hash.slice(1));
+  select(session(want) ? want : (S.cur && session(S.cur) ? S.cur : S.bundle.sessions[0].id));
+}
+(async function boot() {
+  try {
+    const [b, cfg] = await Promise.all([fetch("/api/bundle").then((r) => r.json()),
+      fetch("/api/config").then((r) => r.json())]);
+    S.bundle = b; S.cfg = cfg; S.saveDir = cfg.save_dir;
+    const q = new URLSearchParams(location.search).get("rater") || cfg.default_rater;
+    if (q) loadRater(q.replace(/[^A-Za-z0-9_-]+/g, "_")); else askRater();
+  } catch (e) {
+    $("main").textContent = "Could not load the run. Start the annotator with " +
+      "`endings diffusion irr-annotate --run-dir <run>` and open the URL it prints.";
+  }
+})();
+</script>
+</body>
+</html>
