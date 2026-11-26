@@ -549,3 +549,34 @@ Rate the holdout r ≥ 2 times and report the judge's intra-rater α.
   area). Proportional allocation remains the default. OQ-ANNOT-1 is resolved as "proportional
   allocation with a floor, plus recorded weights". Stratifying by condition x timepoint remains
   opt-in via `stratify_by`. Test: `test_min_per_stratum_protects_small_timepoints_and_records_weights`.
+
+---
+
+## Run audit annotator (`eval/irr_viewer.py`, key `AUDIT`), added 2026-11-25
+
+### D-AUDIT-1: A separate, non-blind tool for auditing runs and the judge
+
+**Decision.** `endings diffusion irr-annotate --run-dir <run>` serves a local browser tool (stdlib
+`http.server` on 127.0.0.1). Annotators score each run on realism (simulated user, companion, arc,
+overall; 1-5) and on overall judge trustworthiness (1-5). For each judged probe they give a 1-5
+judge-quality score and an agree / disagree / unsure verdict on every code the judge assigned,
+with the value they would have given when they disagree. They can also highlight any span of a
+turn, probe, judge rationale or coach text, tagged realism / judge / other and issue / good, with
+a comment. Each rater's work autosaves to `<run_dir>/irr/<rater>.json` (schema
+`endings.irr_annotations/v1`). `irr-agreement` writes `irr/agreement.json`: ordinal α per run-level
+and probe-level score, plus nominal α and the judge-acceptance rate per criterion (`unsure` counts
+as missing).
+
+**Rationale.** The blind annotator (D-ANNOT-*) answers "can the judge stand in for a human?" This
+tool answers two different questions: "are the simulated runs believable?" and "where does the
+judge go wrong?" Both need the whole conversation and the judge's output on screen.
+
+**Consequences for analysis.** The verdicts and corrected values are anchored on the judge's
+codes. They are audit evidence, not independent ratings, and must not be fed into `irr_report` or
+`calibrate_judge`. `--blind` hides conditions, session ids and coach interventions / directives,
+and shuffles the run order, so realism scores are not anchored on the arm. The browser sees only
+opaque ids; the server maps them back, so files on disk always use real ids and blind and unblind
+raters stay comparable. Timepoint labels stay visible because timepoint appropriateness cannot be
+audited without them, and a control run that stays at T0 can still reveal its arm. A stale tab
+cannot overwrite newer saved work: saves carry a revision and a mismatch returns 409. Tests:
+`tests/diffusion/test_dx_irr_viewer.py`.
