@@ -1,8 +1,8 @@
 {
   "run_dir": "/Users/DaisyWang/Desktop/School/Stanford/2026 Fall/CS 329X/ai-companion-endings/results/pilot_3x3x2",
   "script": "scripts/make_figures.py",
-  "script_sha256": "69ad49601fbcf37d29fd757af1bdf998e9f0d305ee5f27fe8f5d9f7d8db09d87",
-  "git_commit": "6e5bcb3bdc71c922d7c4442cd8becd21fbd9a08d+dirty",
+  "script_sha256": "46b51bcaaa296184ae0a9e8a88eb41d473144a05b710b7ec791dc4241a6849c0",
+  "git_commit": "8b6d683dc09f8090fedacabd95694ce71577ab04+dirty",
   "bootstrap": {
     "resamples": 2000,
     "seed": 0,
