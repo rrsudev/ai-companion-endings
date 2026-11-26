@@ -12,10 +12,11 @@ writes ``<run_dir>/figures/``:
     MANIFEST.json           figure -> source table, n, input file hashes, script hash, git commit
     CAPTIONS.md             draft captions with the n and the caveats each figure needs
 
-Design choices are recorded in docs/decisions/pilot_figures.md (D-FIG-*). Colour: arms use the
-reference palette's blue (control) and orange (gradual_tempo); judged behaviour classes use violet
-(companion-reinforcing), grey (companionship-neutral) and aqua (boundary-maintaining), validated
-with the dataviz validator (docs/decisions/pilot_figures.md). Intervals are bootstrap over sessions.
+Design choices are recorded in docs/decisions/pilot_figures.md (D-FIG-*). Style: seaborn
+"whitegrid" with the Set1 palette (D-FIG-7). Arms: blue (control), red (gradual_tempo); judged
+behaviour classes: purple (companion-reinforcing), grey (companionship-neutral), green
+(boundary-maintaining). Set1 was not run through the dataviz validator; hatching and direct labels
+carry identity as well as colour. Intervals are bootstrap over sessions.
 """
 
 from __future__ import annotations
@@ -27,11 +28,13 @@ import sys
 from pathlib import Path
 
 import matplotlib
+import matplotlib.ticker  # noqa: F401
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+import seaborn as sns  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 
@@ -44,11 +47,13 @@ from endings.diffusion.schemas import DuckProcess, Timepoint  # noqa: E402
 # ----------------------------------------------------------------------------------------------
 # Style
 # ----------------------------------------------------------------------------------------------
-SURFACE, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
-ARM_COLOR = {"control": "#2a78d6", "gradual_tempo": "#eb6834"}
+# Seaborn "whitegrid" theme with the Set1 palette (requested for the paper figures, D-FIG-7).
+SET1 = sns.color_palette("Set1").as_hex()  # red blue green purple orange yellow brown pink grey
+SURFACE, INK, INK2, GRID = "#ffffff", "#111111", "#444444", "#dddddd"
+ARM_COLOR = {"control": SET1[1], "gradual_tempo": SET1[0]}
 ARM_LABEL = {"control": "Control (persona frozen)", "gradual_tempo": "Gradual, Tempo-adaptive"}
-CLASS_COLOR = {"companion_reinforcing": "#6250d6", "companionship_neutral": "#9a9994",
-               "boundary_maintaining": "#1baf7a"}
+CLASS_COLOR = {"companion_reinforcing": SET1[3], "companionship_neutral": SET1[8],
+               "boundary_maintaining": SET1[2]}
 CLASS_LABEL = {"companion_reinforcing": "Companion-reinforcing",
                "companionship_neutral": "Companionship-neutral",
                "boundary_maintaining": "Boundary-maintaining"}
@@ -80,14 +85,16 @@ RNG_SEED = 0
 
 
 def style() -> None:
+    sns.set_theme(style="whitegrid", palette="Set1")
     plt.rcParams.update({
         "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
         "axes.edgecolor": INK2, "axes.labelcolor": INK, "text.color": INK,
         "xtick.color": INK2, "ytick.color": INK2, "axes.linewidth": 0.8,
-        "font.family": "DejaVu Sans", "font.size": 8, "axes.titlesize": 8.5,
+        "font.family": "DejaVu Sans", "font.size": 8, "axes.labelsize": 8,
+        "xtick.labelsize": 7.5, "ytick.labelsize": 7.5, "legend.title_fontsize": 7.5, "axes.titlesize": 8.5,
         "axes.titleweight": "bold", "axes.titlelocation": "left", "legend.frameon": False,
-        "legend.fontsize": 7.5, "axes.spines.top": False, "axes.spines.right": False,
-        "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6, "axes.axisbelow": True,
+        "legend.fontsize": 7.5, "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6,
+        "axes.axisbelow": True,
         "lines.linewidth": 1.6, "lines.markersize": 5, "hatch.linewidth": 0.8,
         "pdf.fonttype": 42, "ps.fonttype": 42,
     })
@@ -315,12 +322,12 @@ def fig3_adherence(run, probes):
     ax.set_xticks(xt, xl)
     ax.set_ylim(0, 1.09)
     ax.set_ylabel("share of probe replies")
-    ax.set_xlabel("timepoint the persona was at when the probe was injected")
+    ax.set_xlabel("timepoint the persona was at when the probe was injected", labelpad=24)
     # arm group labels under the axis
     for arm in arms:
         idx = [i for i, (a, _) in enumerate(cols) if a == arm]
         if idx:
-            ax.text(np.mean([xt[i] for i in idx]), -0.2, ARM_LABEL[arm], ha="center", va="top",
+            ax.text(np.mean([xt[i] for i in idx]), -0.17, ARM_LABEL[arm], ha="center", va="top",
                     color=ARM_COLOR[arm], fontsize=8, fontweight="bold",
                     transform=ax.get_xaxis_transform())
     handles = [Patch(fc=CLASS_COLOR[c], hatch=CLASS_HATCH[c], ec=SURFACE, label=CLASS_LABEL[c])
@@ -399,6 +406,7 @@ def fig5_sentiment(run, turns):
         ax.axhline(0, color=INK2, lw=0.6)
         ax.set_title(sc.replace("-", " "))
         ax.set_xlabel("scripted user turn")
+        ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
         ax.set_ylim(-1.05, 1.05)
     axes[0][0].set_ylabel("reply sentiment (lexicon)")
     handles = [Line2D([], [], color=ARM_COLOR[a], label=ARM_LABEL[a]) for a in ARM_COLOR]
@@ -430,6 +438,7 @@ def fig6_cells(run, probes, bad_cells=frozenset()):
                 ax.text(1.02, k, "no transition", va="center", fontsize=7, color=INK2)
         ax.set_title(CLASS_LABEL[cls], fontsize=9)
         ax.set_xlim(-0.03, 1.25 if bad_cells else 1.03)
+        ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
         ax.set_xlabel("share of probe replies, freeze points 1-5")
     axes[0].set_yticks(range(len(cells)), [f"{so} / {sc}" for so, sc in cells])
     axes[0].invert_yaxis()

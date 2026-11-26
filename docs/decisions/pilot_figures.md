@@ -88,3 +88,10 @@ The three steady-graduate cells (sd01, sd02, sd04) never left T0 under the adapt
 `manipulation_delivered` is False. Pooled figures 2-5 drop those cells from **both** arms (paired
 analysis; the pipeline report drops only the Tempo session, leaving control n=9 vs tempo n=6).
 Figure 1 and figure 6 still show them (hollow markers). Consequence: pooled control n=6 sessions.
+
+## D-FIG-7: seaborn whitegrid + Set1 palette (requested by the author)
+Replaces the validated blue/orange/violet/aqua palette. Arms: Set1 blue (control), Set1 red
+(gradual_tempo). Classes: purple (companion-reinforcing), grey (neutral), green (boundary-maintaining).
+Set1 has not been checked with `validate_palette.js`; red/green are a colour-blind-risky pair, so
+the figures keep hatching, markers of different shape, and direct labels. The earlier palette is in
+git history (commit db5d59d).
