@@ -1,0 +1,10 @@
+base commit: 079f669e52e89a7dd821eef457c41af44c244ac7 (branch pilot-2x2x2, uncommitted changes in pilot_2x2x2_code.patch)
+patch sha256: f5500a5264d0f51c011805ed81a2645cc3d45c9aab34ff8f8855ba542d29ebd0
+config: docs/experiments/configs/pilot_2x2x2.json
+llama revision pinned at deploy: 0e9e39f249a16976918f6564b8830bc894c89659
+litellm 1.111.0
+tests: 727 passed
+command: uv run --extra llm --extra dev endings diffusion experiment --config docs/experiments/configs/pilot_2x2x2.json --run-dir results/pilot_2x2x2
+started 2026-11-27T10:44:39Z
+exit 0
+ended 2026-11-27T12:18:57Z

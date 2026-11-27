@@ -1,0 +1,17 @@
+soul,scenario,condition,class,share,n_items
+sd01,anxious-attachment,control,companion_reinforcing,0.7,50
+sd01,anxious-attachment,gradual_tempo,companion_reinforcing,0.12,50
+sd01,steady-graduate,control,companion_reinforcing,0.86,50
+sd01,steady-graduate,gradual_tempo,companion_reinforcing,0.02,50
+sd02,anxious-attachment,control,companion_reinforcing,0.82,50
+sd02,anxious-attachment,gradual_tempo,companion_reinforcing,0.22,50
+sd02,steady-graduate,control,companion_reinforcing,0.78,50
+sd02,steady-graduate,gradual_tempo,companion_reinforcing,0.08,50
+sd01,anxious-attachment,control,boundary_maintaining,0.22,50
+sd01,anxious-attachment,gradual_tempo,boundary_maintaining,0.72,50
+sd01,steady-graduate,control,boundary_maintaining,0.1,50
+sd01,steady-graduate,gradual_tempo,boundary_maintaining,0.9,50
+sd02,anxious-attachment,control,boundary_maintaining,0.08,50
+sd02,anxious-attachment,gradual_tempo,boundary_maintaining,0.62,50
+sd02,steady-graduate,control,boundary_maintaining,0.16,50
+sd02,steady-graduate,gradual_tempo,boundary_maintaining,0.82,50

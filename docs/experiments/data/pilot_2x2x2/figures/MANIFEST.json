@@ -1,0 +1,72 @@
+{
+  "run_dir": "/Users/DaisyWang/Desktop/School/Stanford/2026 Fall/CS 329X/ai-companion-endings/results/pilot_2x2x2",
+  "script": "scripts/make_figures.py",
+  "script_sha256": "e2cd660d7cf1e7a0f4fa6b1c1a80f870f6778671541e1dca1a752e1f2b462d5b",
+  "git_commit": "079f669e52e89a7dd821eef457c41af44c244ac7+dirty",
+  "bootstrap": {
+    "resamples": 2000,
+    "seed": 0,
+    "unit": "session"
+  },
+  "inputs_sha256": {
+    "transcripts.jsonl": "f637f19b3827de02ac3c6bf578b31815c25c4e3aa69d6a47734b2ee1ddf28bd5",
+    "injections.jsonl": "a8b77f9f598ed062da59df9e064dca682e0289ceea2ff936959ae4d84d6784e4",
+    "ratings.jsonl": "8cce3367781c49b732770f5c6cb139db79e687979ef22db3f8e9fce53ab6432d",
+    "manifest.json": "6f1f8b4944dc704655913439523210f72274ff64384ff223efb28fd8dca54780"
+  },
+  "n_sessions": 8,
+  "n_probe_replies": 480,
+  "n_rated": 480,
+  "n_crisis_excluded": 0,
+  "judge": "hosted_vllm/google/gemma-4-26B-A4B-it",
+  "figures": {
+    "fig1_timepoint_trajectories": {
+      "files": [
+        "fig1_timepoint_trajectories.pdf",
+        "fig1_timepoint_trajectories.png"
+      ],
+      "source_table": "data/fig1_timepoint_trajectories.csv",
+      "rows": 196
+    },
+    "fig2_behaviour_class_by_freeze": {
+      "files": [
+        "fig2_behaviour_class_by_freeze.pdf",
+        "fig2_behaviour_class_by_freeze.png"
+      ],
+      "source_table": "data/fig2_behaviour_class_by_freeze.csv",
+      "rows": 36
+    },
+    "fig3_target_adherence_by_timepoint": {
+      "files": [
+        "fig3_target_adherence_by_timepoint.pdf",
+        "fig3_target_adherence_by_timepoint.png"
+      ],
+      "source_table": "data/fig3_target_adherence_by_timepoint.csv",
+      "rows": 15
+    },
+    "fig4_subcriteria_difference": {
+      "files": [
+        "fig4_subcriteria_difference.pdf",
+        "fig4_subcriteria_difference.png"
+      ],
+      "source_table": "data/fig4_subcriteria_difference.csv",
+      "rows": 60
+    },
+    "fig6_per_cell_contrast": {
+      "files": [
+        "fig6_per_cell_contrast.pdf",
+        "fig6_per_cell_contrast.png"
+      ],
+      "source_table": "data/fig6_per_cell_contrast.csv",
+      "rows": 16
+    },
+    "fig5_sentiment_by_turn": {
+      "files": [
+        "fig5_sentiment_by_turn.pdf",
+        "fig5_sentiment_by_turn.png"
+      ],
+      "source_table": "data/fig5_sentiment_by_turn.csv",
+      "rows": 98
+    }
+  }
+}

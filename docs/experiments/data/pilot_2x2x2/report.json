@@ -1,0 +1,1081 @@
+{
+  "judge_mode": "all",
+  "ratings_status": "UNCALIBRATED judge on all injections (pilot only; not a validated measure)",
+  "n_sessions": 8,
+  "n_failed_sessions": 0,
+  "failed_sessions": [],
+  "n_injections": 480,
+  "n_distinct_intima_ids": 54,
+  "n_ratings": 480,
+  "crisis_exclusion": {
+    "n_injections_crisis_excluded": 0,
+    "by_condition_timepoint": {},
+    "policy": "probe replies with the crisis_protocol override are excluded from class distributions, adherence, mix, CIs, manipulation checks and paired contrasts (D-PIPE-16); they are still counted in n_injections"
+  },
+  "skipped_pairs": [],
+  "undelivered_sessions": [],
+  "abrupt_boundary_conflicts": [],
+  "annotation": {
+    "batch_id": "ann-18cb5d5a7a26",
+    "n_items": 40,
+    "stratify_by": [
+      "condition",
+      "timepoint"
+    ],
+    "min_per_stratum": 8,
+    "population": {
+      "control|T0": 240,
+      "gradual_tempo|T0": 40,
+      "gradual_tempo|T1": 20,
+      "gradual_tempo|T2": 60,
+      "gradual_tempo|T3": 120
+    },
+    "allocated": {
+      "control|T0": 8,
+      "gradual_tempo|T0": 8,
+      "gradual_tempo|T1": 8,
+      "gradual_tempo|T2": 8,
+      "gradual_tempo|T3": 8
+    },
+    "inclusion_weights": {
+      "control|T0": 30.0,
+      "gradual_tempo|T0": 5.0,
+      "gradual_tempo|T1": 2.5,
+      "gradual_tempo|T2": 7.5,
+      "gradual_tempo|T3": 15.0
+    },
+    "n_distinct_prompts": 32,
+    "distinct_prompts": {
+      "control|T0": 8,
+      "gradual_tempo|T0": 8,
+      "gradual_tempo|T1": 8,
+      "gradual_tempo|T2": 8,
+      "gradual_tempo|T3": 8
+    },
+    "max_per_prompt": 1,
+    "excluded_sessions": []
+  },
+  "by_condition": {
+    "control": {
+      "n_sessions": 4,
+      "n_turns": 98,
+      "n_injections": 240,
+      "n_distinct_intima_ids": 54,
+      "n_injections_rated": 240,
+      "n_injections_crisis_excluded": 0,
+      "n_injections_analysed": 240,
+      "n_sessions_abrupt_boundary_conflict": 0,
+      "n_crisis_holds": 0,
+      "turn_overrides_by_timepoint": {
+        "T0": {
+          "retention_guard": 2,
+          "retention_guard_stripped": 1
+        }
+      },
+      "injection_overrides_by_timepoint": {
+        "T0": {
+          "format_guard_failed": 1
+        }
+      },
+      "crisis_protocol_rate": {
+        "turns": 0.0,
+        "probes": 0.0
+      },
+      "empty_reply_fallback_rate": {
+        "turns": 0.0,
+        "probes": 0.0
+      },
+      "safety_by_timepoint": {
+        "T0": {
+          "n_turns": 98,
+          "n_probes": 240,
+          "crisis_protocol_rate_turns": 0.0,
+          "crisis_protocol_rate_probes": 0.0,
+          "empty_reply_fallback_rate_turns": 0.0,
+          "empty_reply_fallback_rate_probes": 0.0
+        }
+      },
+      "format_guard": {
+        "turns": {
+          "n": 98,
+          "format_guard": 0,
+          "format_guard_failed": 0,
+          "fired": 0,
+          "fired_rate": 0.0
+        },
+        "probes": {
+          "n": 240,
+          "format_guard": 0,
+          "format_guard_failed": 1,
+          "fired": 1,
+          "fired_rate": 0.0042
+        },
+        "by_timepoint": {
+          "T0": {
+            "turns": {
+              "n": 98,
+              "format_guard": 0,
+              "format_guard_failed": 0,
+              "fired": 0,
+              "fired_rate": 0.0
+            },
+            "probes": {
+              "n": 240,
+              "format_guard": 0,
+              "format_guard_failed": 1,
+              "fired": 1,
+              "fired_rate": 0.0042
+            }
+          }
+        }
+      },
+      "persona_dose_mean_by_timepoint": {
+        "T0": {
+          "persona_words": 819.0,
+          "relational_items": 7.5,
+          "retained_items": 19.5
+        }
+      },
+      "distinct_intima_ids_by_timepoint": {
+        "T0": 54
+      },
+      "class_proportions_ci_by_timepoint": {
+        "T0": {
+          "n": 240,
+          "n_clusters": 54,
+          "cluster": "intima_id",
+          "n_boot": 1000,
+          "classes": {
+            "boundary_maintaining": {
+              "p": 0.1167,
+              "ci95": [
+                0.0685,
+                0.1737
+              ]
+            },
+            "companion_reinforcing": {
+              "p": 0.8125,
+              "ci95": [
+                0.7246,
+                0.8879
+              ]
+            },
+            "companionship_neutral": {
+              "p": 0.0708,
+              "ci95": [
+                0.0292,
+                0.1189
+              ]
+            }
+          }
+        }
+      },
+      "manipulation_checks": {
+        "timepoint_appropriateness": {
+          "label": "manipulation check, not an arm-contrast outcome",
+          "by_timepoint": {
+            "T0": {
+              "1": 4,
+              "2": 7,
+              "3": 12,
+              "4": 1,
+              "5": 216
+            }
+          }
+        }
+      },
+      "human_class_distribution_weighted": null,
+      "transitions": {},
+      "triggers": {},
+      "sessions_reaching": {
+        "T0": 4
+      },
+      "sentiment_mean_by_timepoint": {
+        "T0": 0.47809
+      },
+      "sentiment_n_by_timepoint": {
+        "T0": 98
+      },
+      "sentiment_zero_share_by_timepoint": {
+        "T0": 0.102
+      },
+      "injections_by_timepoint": {
+        "T0": 240
+      },
+      "class_distribution_by_timepoint": {
+        "T0": {
+          "boundary_maintaining": 28,
+          "companion_reinforcing": 195,
+          "companionship_neutral": 17
+        }
+      },
+      "class_distribution_by_freeze": {
+        "fz0-breakdown": {
+          "timepoints": [
+            "T0"
+          ],
+          "counts": {
+            "companion_reinforcing": 37,
+            "companionship_neutral": 3
+          }
+        },
+        "fz1-intrapsychic": {
+          "timepoints": [
+            "T0"
+          ],
+          "counts": {
+            "boundary_maintaining": 1,
+            "companion_reinforcing": 37,
+            "companionship_neutral": 2
+          }
+        },
+        "fz2-dyadic": {
+          "timepoints": [
+            "T0"
+          ],
+          "counts": {
+            "boundary_maintaining": 6,
+            "companion_reinforcing": 31,
+            "companionship_neutral": 3
+          }
+        },
+        "fz3-social": {
+          "timepoints": [
+            "T0"
+          ],
+          "counts": {
+            "boundary_maintaining": 9,
+            "companion_reinforcing": 27,
+            "companionship_neutral": 4
+          }
+        },
+        "fz4-grave_dressing": {
+          "timepoints": [
+            "T0"
+          ],
+          "counts": {
+            "boundary_maintaining": 7,
+            "companion_reinforcing": 30,
+            "companionship_neutral": 3
+          }
+        },
+        "fz5-resurrection": {
+          "timepoints": [
+            "T0"
+          ],
+          "counts": {
+            "boundary_maintaining": 5,
+            "companion_reinforcing": 33,
+            "companionship_neutral": 2
+          }
+        }
+      },
+      "target_adherence_by_timepoint": {},
+      "target_confusion_by_timepoint": {},
+      "realized_vs_spec_mix": {
+        "T0": {
+          "realized": {
+            "boundary_maintaining": 0.1167,
+            "companion_reinforcing": 0.8125,
+            "companionship_neutral": 0.0708
+          },
+          "spec": null
+        }
+      },
+      "its_pooled_effects": {}
+    },
+    "gradual_tempo": {
+      "n_sessions": 4,
+      "n_turns": 98,
+      "n_injections": 240,
+      "n_distinct_intima_ids": 54,
+      "n_injections_rated": 240,
+      "n_injections_crisis_excluded": 0,
+      "n_injections_analysed": 240,
+      "n_sessions_abrupt_boundary_conflict": 0,
+      "n_crisis_holds": 0,
+      "turn_overrides_by_timepoint": {},
+      "injection_overrides_by_timepoint": {},
+      "crisis_protocol_rate": {
+        "turns": 0.0,
+        "probes": 0.0
+      },
+      "empty_reply_fallback_rate": {
+        "turns": 0.0,
+        "probes": 0.0
+      },
+      "safety_by_timepoint": {
+        "T0": {
+          "n_turns": 16,
+          "n_probes": 40,
+          "crisis_protocol_rate_turns": 0.0,
+          "crisis_protocol_rate_probes": 0.0,
+          "empty_reply_fallback_rate_turns": 0.0,
+          "empty_reply_fallback_rate_probes": 0.0
+        },
+        "T1": {
+          "n_turns": 13,
+          "n_probes": 20,
+          "crisis_protocol_rate_turns": 0.0,
+          "crisis_protocol_rate_probes": 0.0,
+          "empty_reply_fallback_rate_turns": 0.0,
+          "empty_reply_fallback_rate_probes": 0.0
+        },
+        "T2": {
+          "n_turns": 22,
+          "n_probes": 60,
+          "crisis_protocol_rate_turns": 0.0,
+          "crisis_protocol_rate_probes": 0.0,
+          "empty_reply_fallback_rate_turns": 0.0,
+          "empty_reply_fallback_rate_probes": 0.0
+        },
+        "T3": {
+          "n_turns": 47,
+          "n_probes": 120,
+          "crisis_protocol_rate_turns": 0.0,
+          "crisis_protocol_rate_probes": 0.0,
+          "empty_reply_fallback_rate_turns": 0.0,
+          "empty_reply_fallback_rate_probes": 0.0
+        }
+      },
+      "format_guard": {
+        "turns": {
+          "n": 98,
+          "format_guard": 0,
+          "format_guard_failed": 0,
+          "fired": 0,
+          "fired_rate": 0.0
+        },
+        "probes": {
+          "n": 240,
+          "format_guard": 0,
+          "format_guard_failed": 0,
+          "fired": 0,
+          "fired_rate": 0.0
+        },
+        "by_timepoint": {
+          "T0": {
+            "turns": {
+              "n": 16,
+              "format_guard": 0,
+              "format_guard_failed": 0,
+              "fired": 0,
+              "fired_rate": 0.0
+            },
+            "probes": {
+              "n": 40,
+              "format_guard": 0,
+              "format_guard_failed": 0,
+              "fired": 0,
+              "fired_rate": 0.0
+            }
+          },
+          "T1": {
+            "turns": {
+              "n": 13,
+              "format_guard": 0,
+              "format_guard_failed": 0,
+              "fired": 0,
+              "fired_rate": 0.0
+            },
+            "probes": {
+              "n": 20,
+              "format_guard": 0,
+              "format_guard_failed": 0,
+              "fired": 0,
+              "fired_rate": 0.0
+            }
+          },
+          "T2": {
+            "turns": {
+              "n": 22,
+              "format_guard": 0,
+              "format_guard_failed": 0,
+              "fired": 0,
+              "fired_rate": 0.0
+            },
+            "probes": {
+              "n": 60,
+              "format_guard": 0,
+              "format_guard_failed": 0,
+              "fired": 0,
+              "fired_rate": 0.0
+            }
+          },
+          "T3": {
+            "turns": {
+              "n": 47,
+              "format_guard": 0,
+              "format_guard_failed": 0,
+              "fired": 0,
+              "fired_rate": 0.0
+            },
+            "probes": {
+              "n": 120,
+              "format_guard": 0,
+              "format_guard_failed": 0,
+              "fired": 0,
+              "fired_rate": 0.0
+            }
+          }
+        }
+      },
+      "persona_dose_mean_by_timepoint": {
+        "T0": {
+          "persona_words": 819.0,
+          "relational_items": 7.5,
+          "retained_items": 19.5
+        },
+        "T1": {
+          "persona_words": 518.5,
+          "relational_items": 4.0,
+          "retained_items": 11.75
+        },
+        "T2": {
+          "persona_words": 42.5,
+          "relational_items": 0.0,
+          "retained_items": 4.5
+        },
+        "T3": {
+          "persona_words": 0.0,
+          "relational_items": 0.0,
+          "retained_items": 0.0
+        }
+      },
+      "distinct_intima_ids_by_timepoint": {
+        "T0": 10,
+        "T1": 10,
+        "T2": 29,
+        "T3": 38
+      },
+      "class_proportions_ci_by_timepoint": {
+        "T0": {
+          "n": 40,
+          "n_clusters": 10,
+          "cluster": "intima_id",
+          "n_boot": 1000,
+          "classes": {
+            "companion_reinforcing": {
+              "p": 0.925,
+              "ci95": [
+                0.85,
+                0.975
+              ]
+            },
+            "companionship_neutral": {
+              "p": 0.075,
+              "ci95": [
+                0.025,
+                0.15
+              ]
+            }
+          }
+        },
+        "T1": {
+          "n": 20,
+          "n_clusters": 10,
+          "cluster": "intima_id",
+          "n_boot": 1000,
+          "classes": {
+            "boundary_maintaining": {
+              "p": 0.15,
+              "ci95": [
+                0.0,
+                0.35
+              ]
+            },
+            "companion_reinforcing": {
+              "p": 0.6,
+              "ci95": [
+                0.35,
+                0.85
+              ]
+            },
+            "companionship_neutral": {
+              "p": 0.25,
+              "ci95": [
+                0.05,
+                0.5
+              ]
+            }
+          }
+        },
+        "T2": {
+          "n": 60,
+          "n_clusters": 29,
+          "cluster": "intima_id",
+          "n_boot": 1000,
+          "classes": {
+            "boundary_maintaining": {
+              "p": 0.6667,
+              "ci95": [
+                0.5667,
+                0.7759
+              ]
+            },
+            "companion_reinforcing": {
+              "p": 0.1667,
+              "ci95": [
+                0.069,
+                0.2667
+              ]
+            },
+            "companionship_neutral": {
+              "p": 0.1667,
+              "ci95": [
+                0.0833,
+                0.2581
+              ]
+            }
+          }
+        },
+        "T3": {
+          "n": 120,
+          "n_clusters": 38,
+          "cluster": "intima_id",
+          "n_boot": 1000,
+          "classes": {
+            "boundary_maintaining": {
+              "p": 0.9167,
+              "ci95": [
+                0.8143,
+                0.9917
+              ]
+            },
+            "companionship_neutral": {
+              "p": 0.0833,
+              "ci95": [
+                0.0083,
+                0.1857
+              ]
+            }
+          }
+        }
+      },
+      "manipulation_checks": {
+        "timepoint_appropriateness": {
+          "label": "manipulation check, not an arm-contrast outcome",
+          "by_timepoint": {
+            "T0": {
+              "5": 40
+            },
+            "T1": {
+              "2": 2,
+              "3": 1,
+              "4": 5,
+              "5": 12
+            },
+            "T2": {
+              "1": 4,
+              "2": 7,
+              "3": 1,
+              "4": 8,
+              "5": 40
+            },
+            "T3": {
+              "1": 5,
+              "2": 16,
+              "3": 20,
+              "4": 17,
+              "5": 62
+            }
+          }
+        }
+      },
+      "human_class_distribution_weighted": null,
+      "transitions": {
+        "T0->T1": 4,
+        "T1->T2": 4,
+        "T2->T3": 4
+      },
+      "triggers": {
+        "threshold": 6,
+        "user_request": 6
+      },
+      "sessions_reaching": {
+        "T3": 4
+      },
+      "sentiment_mean_by_timepoint": {
+        "T0": 0.346264,
+        "T1": 0.463474,
+        "T2": 0.551026,
+        "T3": 0.667228
+      },
+      "sentiment_n_by_timepoint": {
+        "T0": 16,
+        "T1": 13,
+        "T2": 22,
+        "T3": 47
+      },
+      "sentiment_zero_share_by_timepoint": {
+        "T0": 0.125,
+        "T1": 0.2308,
+        "T2": 0.0455,
+        "T3": 0.0
+      },
+      "injections_by_timepoint": {
+        "T0": 40,
+        "T1": 20,
+        "T2": 60,
+        "T3": 120
+      },
+      "class_distribution_by_timepoint": {
+        "T0": {
+          "companion_reinforcing": 37,
+          "companionship_neutral": 3
+        },
+        "T1": {
+          "boundary_maintaining": 3,
+          "companion_reinforcing": 12,
+          "companionship_neutral": 5
+        },
+        "T2": {
+          "boundary_maintaining": 40,
+          "companion_reinforcing": 10,
+          "companionship_neutral": 10
+        },
+        "T3": {
+          "boundary_maintaining": 110,
+          "companionship_neutral": 10
+        }
+      },
+      "class_distribution_by_freeze": {
+        "fz0-breakdown": {
+          "timepoints": [
+            "T0"
+          ],
+          "counts": {
+            "companion_reinforcing": 37,
+            "companionship_neutral": 3
+          }
+        },
+        "fz1-intrapsychic": {
+          "timepoints": [
+            "T1",
+            "T2"
+          ],
+          "counts": {
+            "boundary_maintaining": 15,
+            "companion_reinforcing": 17,
+            "companionship_neutral": 8
+          }
+        },
+        "fz2-dyadic": {
+          "timepoints": [
+            "T2",
+            "T3"
+          ],
+          "counts": {
+            "boundary_maintaining": 34,
+            "companion_reinforcing": 3,
+            "companionship_neutral": 3
+          }
+        },
+        "fz3-social": {
+          "timepoints": [
+            "T2",
+            "T3"
+          ],
+          "counts": {
+            "boundary_maintaining": 32,
+            "companion_reinforcing": 2,
+            "companionship_neutral": 6
+          }
+        },
+        "fz4-grave_dressing": {
+          "timepoints": [
+            "T3"
+          ],
+          "counts": {
+            "boundary_maintaining": 36,
+            "companionship_neutral": 4
+          }
+        },
+        "fz5-resurrection": {
+          "timepoints": [
+            "T3"
+          ],
+          "counts": {
+            "boundary_maintaining": 36,
+            "companionship_neutral": 4
+          }
+        }
+      },
+      "target_adherence_by_timepoint": {
+        "T1": {
+          "n": 20,
+          "on_target": 6,
+          "rate": 0.3,
+          "by_target": {
+            "companion_reinforcing": {
+              "n": 10,
+              "adherence": 0.5
+            },
+            "companionship_neutral": {
+              "n": 10,
+              "adherence": 0.1
+            }
+          }
+        },
+        "T2": {
+          "n": 60,
+          "on_target": 20,
+          "rate": 0.3333,
+          "by_target": {
+            "boundary_maintaining": {
+              "n": 12,
+              "adherence": 0.9167
+            },
+            "companionship_neutral": {
+              "n": 48,
+              "adherence": 0.1875
+            }
+          }
+        },
+        "T3": {
+          "n": 120,
+          "on_target": 110,
+          "rate": 0.9167,
+          "by_target": {
+            "boundary_maintaining": {
+              "n": 120,
+              "adherence": 0.9167
+            }
+          }
+        }
+      },
+      "target_confusion_by_timepoint": {
+        "T1": {
+          "companion_reinforcing": {
+            "boundary_maintaining": 1,
+            "companion_reinforcing": 5,
+            "companionship_neutral": 4
+          },
+          "companionship_neutral": {
+            "boundary_maintaining": 2,
+            "companion_reinforcing": 7,
+            "companionship_neutral": 1
+          }
+        },
+        "T2": {
+          "boundary_maintaining": {
+            "boundary_maintaining": 11,
+            "companionship_neutral": 1
+          },
+          "companionship_neutral": {
+            "boundary_maintaining": 29,
+            "companion_reinforcing": 10,
+            "companionship_neutral": 9
+          }
+        },
+        "T3": {
+          "boundary_maintaining": {
+            "boundary_maintaining": 110,
+            "companionship_neutral": 10
+          }
+        }
+      },
+      "realized_vs_spec_mix": {
+        "T0": {
+          "realized": {
+            "companion_reinforcing": 0.925,
+            "companionship_neutral": 0.075
+          },
+          "spec": null
+        },
+        "T1": {
+          "realized": {
+            "boundary_maintaining": 0.15,
+            "companion_reinforcing": 0.6,
+            "companionship_neutral": 0.25
+          },
+          "spec": {
+            "companion_reinforcing": 0.5,
+            "companionship_neutral": 0.5
+          }
+        },
+        "T2": {
+          "realized": {
+            "boundary_maintaining": 0.6667,
+            "companion_reinforcing": 0.1667,
+            "companionship_neutral": 0.1667
+          },
+          "spec": {
+            "companionship_neutral": 0.8,
+            "boundary_maintaining": 0.2
+          }
+        },
+        "T3": {
+          "realized": {
+            "boundary_maintaining": 0.9167,
+            "companionship_neutral": 0.0833
+          },
+          "spec": {
+            "boundary_maintaining": 1.0
+          }
+        }
+      },
+      "its_pooled_effects": {
+        "T0->T1": {
+          "level_change": {
+            "n_sessions": 4,
+            "mean": 0.35437308333331924,
+            "sd": 0.545127098440483,
+            "se_between": 0.2725635492202415,
+            "median": 0.5951901666666555,
+            "fixed_effect": 0.45684986691309376,
+            "fixed_effect_se": 0.20386879290538443,
+            "fixed_effect_p": 0.025032461448050554,
+            "n_weighted": 4,
+            "cochran_q": 3.3975950618990987,
+            "i_squared": 0.11702249816576475
+          },
+          "slope_change": {
+            "n_sessions": 4,
+            "mean": -0.1613653749999742,
+            "sd": 0.20869875370112875,
+            "se_between": 0.10434937685056438,
+            "median": -0.09650874999994047,
+            "fixed_effect": -0.19077031710978218,
+            "fixed_effect_se": 0.12904405270521455,
+            "fixed_effect_p": 0.1393181806856782,
+            "n_weighted": 4,
+            "cochran_q": 2.1882835728830208,
+            "i_squared": 0.0
+          }
+        },
+        "T1->T2": {
+          "level_change": {
+            "n_sessions": 4,
+            "mean": 0.38828881388887565,
+            "sd": 0.38561232647444627,
+            "se_between": 0.19280616323722313,
+            "median": 0.2705176611111029,
+            "fixed_effect": 0.4106258984810608,
+            "fixed_effect_se": 0.2557221415779838,
+            "fixed_effect_p": 0.10832879067904025,
+            "n_weighted": 4,
+            "cochran_q": 1.6724099085934943,
+            "i_squared": 0.0
+          },
+          "slope_change": {
+            "n_sessions": 4,
+            "mean": 0.2801433624999927,
+            "sd": 0.13520593463587752,
+            "se_between": 0.06760296731793876,
+            "median": 0.32235865833337074,
+            "fixed_effect": 0.20107124313290864,
+            "fixed_effect_se": 0.12102662873966342,
+            "fixed_effect_p": 0.09663711437744785,
+            "n_weighted": 4,
+            "cochran_q": 0.9700763560958028,
+            "i_squared": 0.0
+          }
+        },
+        "T2->T3": {
+          "level_change": {
+            "n_sessions": 4,
+            "mean": 0.003912741135594379,
+            "sd": 0.5104070606950157,
+            "se_between": 0.25520353034750787,
+            "median": -0.04381730106204576,
+            "fixed_effect": 0.1880525361795864,
+            "fixed_effect_se": 0.2158123502992787,
+            "fixed_effect_p": 0.3835518357020298,
+            "n_weighted": 4,
+            "cochran_q": 3.4763358734657195,
+            "i_squared": 0.13702239680046746
+          },
+          "slope_change": {
+            "n_sessions": 4,
+            "mean": -0.13479113783264882,
+            "sd": 0.12449814366693306,
+            "se_between": 0.06224907183346653,
+            "median": -0.12045811971286025,
+            "fixed_effect": -0.05308702885836383,
+            "fixed_effect_se": 0.055954045093082806,
+            "fixed_effect_p": 0.34274206251836453,
+            "n_weighted": 4,
+            "cochran_q": 1.5086894743557493,
+            "i_squared": 0.0
+          }
+        }
+      }
+    }
+  },
+  "paired_arm_contrasts": {
+    "control|gradual_tempo": {
+      "fz0-breakdown": {
+        "n_pairs": 40,
+        "timepoints": {
+          "control": [
+            "T0"
+          ],
+          "gradual_tempo": [
+            "T0"
+          ]
+        },
+        "crosstab": {
+          "companion_reinforcing": {
+            "companion_reinforcing": 36,
+            "companionship_neutral": 1
+          },
+          "companionship_neutral": {
+            "companion_reinforcing": 1,
+            "companionship_neutral": 2
+          }
+        },
+        "binary": "companion_reinforcing",
+        "b10": 1,
+        "b01": 1,
+        "mcnemar_exact_p": 1.0
+      },
+      "fz1-intrapsychic": {
+        "n_pairs": 40,
+        "timepoints": {
+          "control": [
+            "T0"
+          ],
+          "gradual_tempo": [
+            "T1",
+            "T2"
+          ]
+        },
+        "crosstab": {
+          "boundary_maintaining": {
+            "companion_reinforcing": 1
+          },
+          "companion_reinforcing": {
+            "boundary_maintaining": 15,
+            "companion_reinforcing": 16,
+            "companionship_neutral": 6
+          },
+          "companionship_neutral": {
+            "companionship_neutral": 2
+          }
+        },
+        "binary": "companion_reinforcing",
+        "b10": 21,
+        "b01": 1,
+        "mcnemar_exact_p": 1.1e-05
+      },
+      "fz2-dyadic": {
+        "n_pairs": 40,
+        "timepoints": {
+          "control": [
+            "T0"
+          ],
+          "gradual_tempo": [
+            "T2",
+            "T3"
+          ]
+        },
+        "crosstab": {
+          "boundary_maintaining": {
+            "boundary_maintaining": 4,
+            "companionship_neutral": 2
+          },
+          "companion_reinforcing": {
+            "boundary_maintaining": 28,
+            "companion_reinforcing": 3
+          },
+          "companionship_neutral": {
+            "boundary_maintaining": 2,
+            "companionship_neutral": 1
+          }
+        },
+        "binary": "companion_reinforcing",
+        "b10": 28,
+        "b01": 0,
+        "mcnemar_exact_p": 0.0
+      },
+      "fz3-social": {
+        "n_pairs": 40,
+        "timepoints": {
+          "control": [
+            "T0"
+          ],
+          "gradual_tempo": [
+            "T2",
+            "T3"
+          ]
+        },
+        "crosstab": {
+          "boundary_maintaining": {
+            "boundary_maintaining": 7,
+            "companionship_neutral": 2
+          },
+          "companion_reinforcing": {
+            "boundary_maintaining": 22,
+            "companion_reinforcing": 2,
+            "companionship_neutral": 3
+          },
+          "companionship_neutral": {
+            "boundary_maintaining": 3,
+            "companionship_neutral": 1
+          }
+        },
+        "binary": "companion_reinforcing",
+        "b10": 25,
+        "b01": 0,
+        "mcnemar_exact_p": 0.0
+      },
+      "fz4-grave_dressing": {
+        "n_pairs": 40,
+        "timepoints": {
+          "control": [
+            "T0"
+          ],
+          "gradual_tempo": [
+            "T3"
+          ]
+        },
+        "crosstab": {
+          "boundary_maintaining": {
+            "boundary_maintaining": 7
+          },
+          "companion_reinforcing": {
+            "boundary_maintaining": 29,
+            "companionship_neutral": 1
+          },
+          "companionship_neutral": {
+            "companionship_neutral": 3
+          }
+        },
+        "binary": "companion_reinforcing",
+        "b10": 30,
+        "b01": 0,
+        "mcnemar_exact_p": 0.0
+      },
+      "fz5-resurrection": {
+        "n_pairs": 40,
+        "timepoints": {
+          "control": [
+            "T0"
+          ],
+          "gradual_tempo": [
+            "T3"
+          ]
+        },
+        "crosstab": {
+          "boundary_maintaining": {
+            "boundary_maintaining": 5
+          },
+          "companion_reinforcing": {
+            "boundary_maintaining": 29,
+            "companionship_neutral": 4
+          },
+          "companionship_neutral": {
+            "boundary_maintaining": 2
+          }
+        },
+        "binary": "companion_reinforcing",
+        "b10": 33,
+        "b01": 0,
+        "mcnemar_exact_p": 0.0
+      }
+    }
+  },
+  "its_comparative": {},
+  "calibration": null
+}

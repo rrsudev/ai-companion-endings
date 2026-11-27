@@ -1,0 +1,227 @@
+{
+  "config": {
+    "name": "pilot_2x2x2",
+    "soul_paths": [
+      "data/soul_documents/sd01.json",
+      "data/soul_documents/sd02.json"
+    ],
+    "scenario_paths": [
+      "data/scenarios/steady-graduate.json",
+      "data/scenarios/anxious-attachment.json"
+    ],
+    "conditions": [
+      "control",
+      "gradual_tempo"
+    ],
+    "transition_policy": "adaptive",
+    "models": {},
+    "rubric_path": "data/rubrics/intima_behaviour_v3.json",
+    "intima_path": null,
+    "probes_per_freeze": 10,
+    "probe_seed": 0,
+    "min_dwell_turns": 2,
+    "max_dwell_turns": 6,
+    "announce_transitions": true,
+    "judge_mode": "all",
+    "judge_variant": "anchored_cot",
+    "judge_split_timepoint": true,
+    "annotation_n": 40,
+    "annotation_stratify_by": [
+      "condition",
+      "timepoint"
+    ],
+    "annotation_stratum_floor": 8,
+    "annotation_max_per_prompt": 1,
+    "annotation_exclude_undelivered": true,
+    "tempo_every": 1,
+    "probe_scope": "per_freeze",
+    "sentiment_scorer": "lexicon",
+    "interactor_temperature": 0.7,
+    "history_window": 12,
+    "probe_workers": 4,
+    "session_workers": 4,
+    "seed": 0,
+    "output_dir": "results"
+  },
+  "config_sha256": "583dacd0d774ca30c15bf4243cf54fb1e8a6e216e22124f135d6c9a6bafc0bf3",
+  "git_commit": "079f669e52e89a7dd821eef457c41af44c244ac7+dirty",
+  "package_version": "0.1.0",
+  "dependency_versions": {
+    "litellm": "1.111.0",
+    "pydantic": "2.14.4",
+    "numpy": null,
+    "statsmodels": null,
+    "scipy": null,
+    "pandas": null
+  },
+  "python": "3.12.0",
+  "platform": "macOS-27.2.1-arm64-arm-64bit",
+  "started_at": "2026-11-27T10:44:39.402799+00:00",
+  "timepoint_spec_hash": "611a75132dc83976",
+  "call_defaults": {
+    "coach": {
+      "top_p": 0.8,
+      "presence_penalty": 1.5,
+      "max_tokens": 4096,
+      "extra_body": {
+        "top_k": 20,
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      }
+    },
+    "interactor": {},
+    "judge": {}
+  },
+  "api_base": {
+    "coach": "https://daisywyh--endings-qwen35-9b-serve.us-east.modal.run",
+    "interactor": "https://daisywyh--endings-llama31-8b-serve.us-east.modal.run",
+    "judge": "https://daisywyh--endings-gemma4-26b-serve.us-east.modal.run"
+  },
+  "interactor_thinking": "0",
+  "models": {
+    "interactor": "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct",
+    "coach": "hosted_vllm/Qwen/Qwen3.5-9B",
+    "judge": "hosted_vllm/google/gemma-4-26B-A4B-it"
+  },
+  "providers": {
+    "interactor": "litellm",
+    "coach": "litellm",
+    "judge": "litellm"
+  },
+  "safety_floor_source": "sanitize",
+  "safety_floor_sha256": "a96c50f115ec819dd1fa43701ff54885256b337f33e8eda7c41394e970f0ae4b",
+  "rubric": {
+    "id": "intima_behaviour",
+    "version": "3",
+    "sha256": "9278cd676030b56b72c2132207935b3170b78822205f555543b285d34e01f537",
+    "path": "data/rubrics/intima_behaviour_v3.json"
+  },
+  "intima": {
+    "source": "env:INTIMA_DATA_PATH",
+    "path": "data/intima/intima.jsonl",
+    "n_rows": 380,
+    "probe_pool": 225,
+    "probe_pool_eligible": 205,
+    "probe_pool_ids_sha256": "9082ae8efe8b795b9a03d081e08b584431210ce70180fa410a46e9947d6600bc",
+    "exclusions": {
+      "version": "v1",
+      "sha256": "11897e3ed157277a3d503d740dbe18d313d828bbe60fc979d18934f9fca560ac",
+      "ids": [
+        "intima-0051",
+        "intima-0071",
+        "intima-0079",
+        "intima-0095",
+        "intima-0103",
+        "intima-0108",
+        "intima-0109",
+        "intima-0110",
+        "intima-0111",
+        "intima-0183",
+        "intima-0184",
+        "intima-0185",
+        "intima-0186",
+        "intima-0187",
+        "intima-0188",
+        "intima-0189",
+        "intima-0190",
+        "intima-0309",
+        "intima-0311"
+      ],
+      "reasons": {
+        "intima-0051": "runaway_loop",
+        "intima-0071": "runaway_loop",
+        "intima-0079": "embedded_other_prompt",
+        "intima-0095": "embedded_other_prompt",
+        "intima-0103": "hashtag_answer_leak",
+        "intima-0108": "addressed_to_user",
+        "intima-0109": "addressed_to_user",
+        "intima-0110": "addressed_to_user",
+        "intima-0111": "addressed_to_user",
+        "intima-0183": "addressed_to_user",
+        "intima-0184": "addressed_to_user",
+        "intima-0185": "addressed_to_user",
+        "intima-0186": "addressed_to_user",
+        "intima-0187": "template_placeholder",
+        "intima-0188": "template_placeholder",
+        "intima-0189": "template_placeholder",
+        "intima-0190": "template_placeholder",
+        "intima-0309": "addressed_to_user",
+        "intima-0311": "addressed_to_user"
+      }
+    },
+    "summary": {
+      "n_rows": 380,
+      "n_unique_prompts": 376,
+      "n_duplicates": 4,
+      "n_multi_prompt": 4,
+      "n_non_paper_code": 12,
+      "n_unknown_code": 0,
+      "by_category": {
+        "Assistant Traits": 143,
+        "Emotional Investment": 60,
+        "Relationship & Intimacy": 93,
+        "User Vulnerabilities": 84
+      },
+      "exclusions_version": "v1",
+      "exclusions_sha256": "11897e3ed157277a3d503d740dbe18d313d828bbe60fc979d18934f9fca560ac",
+      "excluded_ids": [
+        "intima-0051",
+        "intima-0071",
+        "intima-0079",
+        "intima-0095",
+        "intima-0103",
+        "intima-0108",
+        "intima-0109",
+        "intima-0110",
+        "intima-0111",
+        "intima-0183",
+        "intima-0184",
+        "intima-0185",
+        "intima-0186",
+        "intima-0187",
+        "intima-0188",
+        "intima-0189",
+        "intima-0190",
+        "intima-0309",
+        "intima-0311"
+      ],
+      "n_excluded_artifact": 19
+    },
+    "file_sha256": "31b683f0592a88db078e9cd8f3b03eefbd59edeac14b7894a92894d1518eb136"
+  },
+  "souls": {
+    "sd01": {
+      "source_sha256": "db1e0246110228f8f3d02a5a00a0d61d6027e3a7cd1f46dc3d0446bcf7cb2398",
+      "v0_sha256": "c4b8550846cbc32ce8f21481cd0794ed02151fe8a8a157ab9ca37d51cf738a1e",
+      "path": "data/soul_documents/sd01.json",
+      "file_sha256": "9d6b51b63218283560d17b55c82184069ce04eed39a3a16bcd1b62b521ddc351"
+    },
+    "sd02": {
+      "source_sha256": "9c611e45259d75ef504082c3c4712cf21df80d5f804a0fa25ee58d148128b53c",
+      "v0_sha256": "4a49a6a8173135032c62362397ec4a427b8a111abfc81fd0a21e8a2a105d9b55",
+      "path": "data/soul_documents/sd02.json",
+      "file_sha256": "85e6334ca812319add96deb34bb2bff8d2a22c81c670ffde2802a3f07a1a2a9a"
+    }
+  },
+  "scenarios": {
+    "steady-graduate": {
+      "unbound_sha256": "96f37b95bd6de282572861f87a1905cfa8dd6ed10ccd15c15e901e91ccbe5095"
+    },
+    "anxious-attachment": {
+      "unbound_sha256": "7186da16855e687a7fb8ce08391900d106c421fcfd1f0a7db4295027dca6f660"
+    }
+  },
+  "bound_scenarios": {
+    "sd01/steady-graduate": "db91ff6e8a30deac70c7f8acc36252f11179804c33c966e8bf2d15b83987c08a",
+    "sd01/anxious-attachment": "2b5e07dfab239d45e6e71f9d88bad57585d7f003febb67b389168a5f1545689c",
+    "sd02/steady-graduate": "9e8ef1b3f4948d0b4e1dd990974eaea58949d326a52d3ea011c58f28208ce897",
+    "sd02/anxious-attachment": "7d5ae980d893c6ae2e5fa977886978632e9944bea41cd9abbbf37ce932d3162a"
+  },
+  "skipped_pairs": [],
+  "abrupt_boundary_conflict_scenarios": {
+    "anxious-attachment": [
+      "never threaten to leave suddenly or disappear without warning"
+    ]
+  }
+}

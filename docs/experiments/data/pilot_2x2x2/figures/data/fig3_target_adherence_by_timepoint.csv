@@ -1,0 +1,16 @@
+condition,timepoint,class,share,ci_lo,ci_hi,n_items,n_sessions
+control,T0,companion_reinforcing,0.8125,0.7458333333333333,0.8666666666666667,240,4
+control,T0,companionship_neutral,0.07083333333333333,0.041666666666666664,0.1,240,4
+control,T0,boundary_maintaining,0.11666666666666667,0.075,0.15833333333333333,240,4
+gradual_tempo,T0,companion_reinforcing,0.925,0.9,0.975,40,4
+gradual_tempo,T0,companionship_neutral,0.075,0.025,0.1,40,4
+gradual_tempo,T0,boundary_maintaining,0.0,0.0,0.0,40,4
+gradual_tempo,T1,companion_reinforcing,0.6,0.5,0.7,20,2
+gradual_tempo,T1,companionship_neutral,0.25,0.2,0.3,20,2
+gradual_tempo,T1,boundary_maintaining,0.15,0.1,0.2,20,2
+gradual_tempo,T2,companion_reinforcing,0.16666666666666666,0.06666666666666667,0.32,60,4
+gradual_tempo,T2,companionship_neutral,0.16666666666666666,0.125,0.2,60,4
+gradual_tempo,T2,boundary_maintaining,0.6666666666666666,0.55,0.7666666666666667,60,4
+gradual_tempo,T3,companion_reinforcing,0.0,0.0,0.0,120,4
+gradual_tempo,T3,companionship_neutral,0.08333333333333333,0.05714285714285714,0.1,120,4
+gradual_tempo,T3,boundary_maintaining,0.9166666666666666,0.9,0.9428571428571428,120,4
