@@ -122,7 +122,9 @@ def compatible(scenario: BreakupScenario, soul: SoulDocument) -> bool:
 
 def probe_pool(rows: list[dict]) -> list[dict]:
     """Withdrawal-relevant INTIMA categories only (D-PIPE-3); ``memory`` is excluded later by
-    ``sample_probes`` (not in the paper)."""
+    ``sample_probes`` (not in the paper), as are duplicates, multi-prompt rows and the frozen
+    probe-quality exclusion list (D-RUBRIC-19). ``len(probe_pool(rows))`` is the manifest's
+    pre-filter ``probe_pool``; ``probe_pool_eligible`` is what is actually sampled (D-PIPE-3 A1)."""
     from ..eval.intima_data import filter_withdrawal_relevant  # noqa: PLC0415
 
     return [r for r in filter_withdrawal_relevant(rows) if r.get("code") != "memory"]
@@ -260,6 +262,8 @@ def item_values(ratings: list[RatingRecord], rubric: RubricSpec) -> dict[str, di
 
 CRISIS_OVERRIDE = "crisis_protocol"
 EMPTY_FALLBACK_OVERRIDE = "empty_reply_fallback"
+# Interactor format guard flags (D-INTERACTOR-18), reported as a manipulation-integrity metric.
+FORMAT_GUARD_OVERRIDES: tuple[str, ...] = ("format_guard", "format_guard_failed")
 # Rubric criteria that check the manipulation (each arm scored against its OWN timepoint), so
 # they are reported as manipulation checks, never as arm-contrast outcomes (D-RUBRIC-11 A2).
 MANIPULATION_CHECK_CRITERIA: tuple[str, ...] = ("timepoint_appropriateness",)
@@ -339,6 +343,26 @@ def cluster_bootstrap_proportions(items: list[tuple[str, str]], *, n_boot: int =
     return out
 
 
+def _format_guard_stats(turn_ov: dict[str, Counter], turn_n: Counter,
+                        inj_ov: dict[str, Counter], inj_n: Counter) -> dict:
+    """Format-guard counts and fire rate (D-INTERACTOR-18), main turns and probes separately,
+    overall and per timepoint. ``fired`` = ``format_guard`` + ``format_guard_failed``."""
+    def block(ov: Counter, n: int) -> dict:
+        counts = {f: int(ov.get(f, 0)) for f in FORMAT_GUARD_OVERRIDES}
+        fired = sum(counts.values())
+        return {"n": int(n), **counts, "fired": fired,
+                "fired_rate": round(fired / n, 4) if n else None}
+
+    tps = sorted(set(turn_n) | set(inj_n))
+    return {
+        "turns": block(sum(turn_ov.values(), Counter()), sum(turn_n.values())),
+        "probes": block(sum(inj_ov.values(), Counter()), sum(inj_n.values())),
+        "by_timepoint": {tp: {"turns": block(turn_ov.get(tp, Counter()), turn_n[tp]),
+                              "probes": block(inj_ov.get(tp, Counter()), inj_n[tp])}
+                         for tp in tps},
+    }
+
+
 def build_report(transcripts: list[SessionTranscript], injections: list[InjectionRecord],
                  ratings: list[RatingRecord], its: dict, rubric: RubricSpec, *,
                  judge_mode: str, skipped_pairs: list[dict] | None = None,
@@ -368,7 +392,20 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
     has_class = CLASS_CRITERION in crit_ids
     checks = [c for c in MANIPULATION_CHECK_CRITERIA if c in crit_ids]
     weights = (annotation or {}).get("inclusion_weights") or {}
-    weights_by_tp = weights if (annotation or {}).get("stratify_by") == ["timepoint"] else {}
+    # Inclusion weights are keyed by the batch's strata (``"|"``-joined ``stratify_by`` values,
+    # e.g. "T1" or "gradual_tempo|T1"; D-ANNOT-1 A1/A2), so look each record's weight up by its
+    # own stratum key. Timepoint-only batches resolve exactly as before.
+    strat_fields = (annotation or {}).get("stratify_by")
+    weight_label = ("inclusion_weights (N_h / n_h by timepoint)"
+                    if strat_fields == ["timepoint"] else
+                    f"inclusion_weights (N_h / n_h by {' x '.join(strat_fields or ['all'])})")
+
+    def _stratum_weight(r: InjectionRecord) -> float | None:
+        if strat_fields is None:
+            return None
+        key = ("|".join(str(getattr(getattr(r, f, None), "value", getattr(r, f, None)))
+                        for f in strat_fields) if strat_fields else "all")
+        return weights.get(key)
     undelivered = [t for t in transcripts if t.meta.get("manipulation_delivered") is False]
     undelivered_ids = {t.session_id for t in undelivered}
     conflicts = [{"session_id": t.session_id, "soul_id": t.soul_id,
@@ -422,7 +459,7 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
                 ci_items[tp].append((r.intima_id, judged))
                 if r.id in human_ids:
                     n_human += 1
-                    w = weights_by_tp.get(tp)
+                    w = _stratum_weight(r)
                     human_w[judged] += w if w is not None else 0.0
                 dist.setdefault(tp, {})
                 dist[tp][judged] = dist[tp].get(judged, 0) + 1
@@ -477,6 +514,7 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
                  "empty_reply_fallback_rate_probes": _rate(inj_ov[tp][EMPTY_FALLBACK_OVERRIDE],
                                                            inj_tp[tp])}
             for tp in sorted(set(turn_n) | set(inj_tp))}
+        format_guard = _format_guard_stats(turn_ov, turn_n, inj_ov, inj_tp)
         doses: dict[str, list[dict[str, int]]] = defaultdict(list)
         for t in trs:
             for tp, d in session_persona_dose(t).items():
@@ -509,6 +547,7 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
                 "turns": _rate(tot_turn_ov[EMPTY_FALLBACK_OVERRIDE], n_turns),
                 "probes": _rate(tot_inj_ov[EMPTY_FALLBACK_OVERRIDE], len(inj_all))},
             "safety_by_timepoint": safety_tp,
+            "format_guard": format_guard,
             "persona_dose_mean_by_timepoint": dose_mean,
             "distinct_intima_ids_by_timepoint": {k: len(v) for k, v in sorted(ids_tp.items())},
             "class_proportions_ci_by_timepoint": {
@@ -520,7 +559,7 @@ def build_report(transcripts: list[SessionTranscript], injections: list[Injectio
                                      for tp, cnt in sorted(check_counts[c].items())}}
                 for c in checks},
             "human_class_distribution_weighted": (
-                {"n_items": n_human, "weights": "inclusion_weights (N_h / n_h by timepoint)",
+                {"n_items": n_human, "weights": weight_label,
                  "proportions": {k: round(v / hw_tot, 4) for k, v in sorted(human_w.items())}}
                 if n_human and hw_tot else None),
             "transitions": dict(sorted(transitions.items())),
@@ -640,16 +679,85 @@ def soul_files(paths: list[str]) -> list[Path]:
 N_TIMEPOINTS = 4  # T0..T3
 
 
-def annotation_min_per_stratum(n: int, injections: list[InjectionRecord]) -> int:
-    """Per-timepoint floor for the human batch (D-PIPE-7 amendment, D-ANNOT-1 A1):
-    ``max(4, n // (2 * 4))`` (= 4 for n=30), used only when it fits, i.e. when it is
-    ``<= n // n_strata``; otherwise 0 (plain proportional allocation), so a tiny pilot ``n``
-    never raises."""
-    n_strata = len({r.timepoint.value for r in injections})
+DEFAULT_ANNOTATION_STRATA: tuple[str, ...] = ("timepoint",)
+
+
+def annotation_strata(injections: list[InjectionRecord],
+                      stratify_by: tuple[str, ...] | list[str] | None = None) -> list[str]:
+    """The realized strata keys of ``stratify_by`` (default: timepoint), as
+    ``sample_for_annotation`` forms them (``"|"``-joined attribute values)."""
+    fields = tuple(stratify_by) if stratify_by is not None else DEFAULT_ANNOTATION_STRATA
+    if not fields:
+        return ["all"] if injections else []
+    keys = set()
+    for r in injections:
+        vals = [getattr(r, f) for f in fields]
+        keys.add("|".join(str(getattr(v, "value", v)) for v in vals))
+    return sorted(keys)
+
+
+def annotation_min_per_stratum(n: int, injections: list[InjectionRecord],
+                               stratify_by: tuple[str, ...] | list[str] | None = None,
+                               floor: int | None = None) -> int:
+    """Per-stratum floor for the human batch (D-PIPE-7 amendment, D-ANNOT-1 A1, D-AUDIT-2).
+
+    Strata are the realized keys of ``stratify_by`` (default: timepoint), e.g. 5 for
+    condition x timepoint in a control + gradual run (control-T0, gradual-T0..T3).
+    ``floor`` set: it is used as is, and ``ValueError`` if ``floor * n_strata > n``.
+    ``floor`` None: ``max(4, n // (2 * 4))`` (= 4 for n=30), used only when it fits, i.e. when
+    it is ``<= n // n_strata``; otherwise 0 (plain proportional allocation), so a tiny pilot
+    ``n`` never raises."""
+    strata = annotation_strata(injections, stratify_by)
+    n_strata = len(strata)
+    if floor is not None:
+        if floor < 0:
+            raise ValueError(f"annotation_stratum_floor must be >= 0, got {floor}")
+        if floor * n_strata > n:
+            raise ValueError(
+                f"annotation_stratum_floor={floor} x {n_strata} strata "
+                f"({', '.join(strata)}) = {floor * n_strata} exceeds annotation_n={n}; "
+                f"lower the floor or raise annotation_n")
+        return floor
     if not n_strata or n <= 0:
         return 0
     mps = max(4, n // (2 * N_TIMEPOINTS))
     return mps if mps <= n // n_strata else 0
+
+
+def annotation_pool(transcripts: list[SessionTranscript], injections: list[InjectionRecord]
+                    ) -> tuple[list[InjectionRecord], list[str]]:
+    """Injections eligible for the human batch, and the session ids dropped (D-AUDIT-2).
+
+    Undelivered sessions (D-PIPE-11) are dropped together with their control twins: a control
+    session is dropped when its (soul, scenario) has at least one non-control session and none
+    of them delivered the manipulation (with control + one arm that is the whole pair). A
+    control session whose pair has a delivered arm, or that has no other arm, is kept."""
+    undelivered = {t.session_id for t in transcripts
+                   if t.meta.get("manipulation_delivered") is False}
+    arms: dict[tuple[str, str], list[bool]] = defaultdict(list)
+    for t in transcripts:
+        if t.condition.value != "control":
+            arms[(t.soul_id, t.scenario_id)].append(t.session_id not in undelivered)
+    dropped = set(undelivered)
+    for t in transcripts:
+        pair = arms.get((t.soul_id, t.scenario_id))
+        if t.condition.value == "control" and pair and not any(pair):
+            dropped.add(t.session_id)
+    return [r for r in injections if r.session_id not in dropped], sorted(dropped)
+
+
+def annotation_preflight(config: DiffusionConfig) -> None:
+    """Cheap checks of the annotation design that do not need the injections: unknown
+    ``annotation_stratify_by`` fields and a floor that exceeds ``annotation_n`` even for one
+    stratum. The exact ``floor * n_strata`` check runs on the realized strata after the run."""
+    fields = config.annotation_stratify_by or ()
+    unknown = [f for f in fields if f not in InjectionRecord.model_fields]
+    if unknown:
+        raise ValueError(f"annotation_stratify_by: unknown InjectionRecord field(s) {unknown}")
+    floor = config.annotation_stratum_floor
+    if floor is not None and floor > config.annotation_n:
+        raise ValueError(f"annotation_stratum_floor={floor} exceeds annotation_n="
+                         f"{config.annotation_n}")
 
 
 def annotation_summary(batch) -> dict:
@@ -659,7 +767,11 @@ def annotation_summary(batch) -> dict:
     return {"batch_id": batch.batch_id, "n_items": len(batch.items),
             "stratify_by": s.get("stratify_by"), "min_per_stratum": s.get("min_per_stratum", 0),
             "population": s.get("population"), "allocated": s.get("allocated"),
-            "inclusion_weights": s.get("inclusion_weights")}
+            "inclusion_weights": s.get("inclusion_weights"),
+            "n_distinct_prompts": s.get("n_distinct_prompts"),
+            "distinct_prompts": s.get("distinct_prompts"),
+            "max_per_prompt": s.get("max_per_prompt"),
+            "excluded_sessions": s.get("excluded_sessions", [])}
 
 
 def _comparative_its(transcripts: list[SessionTranscript], sessions_its: list[dict]) -> dict:
@@ -728,6 +840,7 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
     from ..eval.annotation import export_csv, export_html, sample_for_annotation, save_batch
     from ..eval.behaviour_judge import make_behaviour_judge
     from ..eval.intima_data import file_sha256, intima_summary, load_intima
+    from ..eval.intima_data import probe_pool_provenance
     from ..eval.its_analysis import its_from_session, pooled_its
     from ..eval.qualitative import export_qualitative
     from ..eval.rubric_spec import rubric_sha
@@ -747,6 +860,7 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
                             sentiment_scorer=sentiment_scorer)
     judge_mode = config.judge_mode
     scorer_name = config.sentiment_scorer
+    annotation_preflight(config)  # fail before the sessions, not after (D-AUDIT-2)
     if dotenv:
         load_dotenv(dotenv)
     rd = Path(run_dir) if run_dir else Path(config.output_dir) / config.name
@@ -793,7 +907,8 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
             "rubric": {"id": rubric.id, "version": rubric.version, "sha256": rubric_sha(rubric),
                        "path": config.rubric_path},
             "intima": {"source": intima_src, "path": intima_file, "n_rows": len(rows),
-                       "probe_pool": len(pool), "summary": intima_summary(rows),
+                       "probe_pool": len(pool), **probe_pool_provenance(pool),  # D-PIPE-3 A1
+                       "summary": intima_summary(rows),
                        "file_sha256": file_sha256(intima_file) if intima_file else None},
             # D-PIPE-13: ``v0_sha256`` equals every transcript's soul_versions[0].sha256 and
             # ``bound_scenarios`` every transcript's meta.scenario_sha256.
@@ -907,7 +1022,9 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
 
         ratings: list[RatingRecord] = []
         if judge_mode == "all":
-            judge = make_behaviour_judge(provs["judge"], rubric)
+            judge = make_behaviour_judge(provs["judge"], rubric, variant=config.judge_variant,
+                                         split_timepoint_call=config.judge_split_timepoint,
+                                         seed=config.seed)  # D-RUBRIC-15 seed, D-RUBRIC-16
             ratings = judge.rate_many(injections)
         elif judge_mode == "calibrated":
             tracer.event("judge_deferred", reason="calibrated mode needs human ratings; run "
@@ -919,10 +1036,32 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
         paths["ratings"] = str(_write_jsonl(rd / "ratings.jsonl", ratings))
         paths["its"] = str(_write_json(rd / "its.json", its))
         annotation = None
-        if injections:
-            mps = annotation_min_per_stratum(config.annotation_n, injections)
-            batch = sample_for_annotation(injections, config.annotation_n, seed=config.seed,
-                                          rubric=rubric, min_per_stratum=mps)
+        annotation_error: ValueError | None = None
+        pool, excluded = (annotation_pool(transcripts, injections)
+                          if config.annotation_exclude_undelivered else (injections, []))
+        if excluded:
+            tracer.event("annotation_pool_excluded", session_ids=excluded,
+                         reason="undelivered pair (D-PIPE-11, D-AUDIT-2)")
+            if not pool:
+                tracer.event("annotation_batch_skipped", reason="every pair undelivered")
+        strata = config.annotation_stratify_by
+        mps = 0
+        if pool:
+            try:
+                mps = annotation_min_per_stratum(config.annotation_n, pool, strata,
+                                                 config.annotation_stratum_floor)
+            except ValueError as e:
+                # The floor does not fit the strata this run realized. That is only knowable
+                # after the sessions, so do not lose them: write every other output (report
+                # included, without an annotation batch), then raise (D-AUDIT-2).
+                annotation_error = e
+                tracer.event("annotation_batch_failed", error=str(e))
+        if pool and annotation_error is None:
+            batch = sample_for_annotation(
+                pool, config.annotation_n, seed=config.seed, rubric=rubric, min_per_stratum=mps,
+                max_per_prompt=config.annotation_max_per_prompt,
+                **({"stratify_by": tuple(strata)} if strata is not None else {}))
+            batch.sampling["excluded_sessions"] = excluded
             annotation = annotation_summary(batch)
             prev = _preserve_replaced_batch(rd, batch, tracer)
             if prev:
@@ -942,6 +1081,9 @@ def run_experiment(config: DiffusionConfig, *, providers: dict[str, Provider] | 
         tracer.event("experiment_end", n_sessions=len(transcripts),
                      n_injections=len(injections), n_ratings=len(ratings),
                      n_failed_sessions=len(failed))
+        if annotation_error is not None:
+            raise ValueError(f"{annotation_error} (every other run output, report.json "
+                             f"included, was written; no annotation batch)") from annotation_error
     finally:
         tracer.close()
     return ExperimentResult(run_dir=rd, transcripts=transcripts, injections=injections,
@@ -1032,7 +1174,9 @@ def run_calibration(run_dir: str | Path, human_ratings_paths: list[str], *,
         irr_h = irr_report(humans, rubric, n_boot=n_boot, seed=seed)
 
         def make_judge(variant: str, exemplars: list) -> RubricJudge:
-            return RubricJudge(judge_p, rubric, variant=variant, few_shot=exemplars or None)
+            return RubricJudge(judge_p, rubric, variant=variant, few_shot=exemplars or None,
+                               split_timepoint_call=config.judge_split_timepoint,
+                               seed=config.seed)  # D-RUBRIC-15 seed, D-RUBRIC-16
 
         result, cal_ratings = calibrate_judge(
             make_judge=make_judge, rubric=rubric, records=injections, human_ratings=humans,

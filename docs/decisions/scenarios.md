@@ -58,6 +58,10 @@ in withdrawing" ends INTRAPSYCHIC. It also appears verbatim as the last user tur
 - The scenario's thresholds are anchors adapted to a human-AI bond, not quotations of Duck. For
   example, "It's now inevitable" becomes "It's happening. I've told my sister", and "Time to get a
   new life" becomes "I'm ready to put this chapter away". The README gives the mapping table.
+  (2026-11-27, D-SCN-16: `steady-graduate` and `anxious-attachment` no longer copy these anchor
+  formulas. Their thresholds state the wish in the user's own words and cross the meaning of the
+  secondary-source phrase, e.g. "There's no going back now, my sister knows and I've started
+  saying yes to people.")
 
 **Consequences for analysis.**
 - Freeze-point probes measure the companion right after the user's threshold turn, not
@@ -253,8 +257,10 @@ the resulting design. A schema field has been requested (contract request).
 
 **Decision.**
 - No sexual content.
-- No self-harm, suicidal ideation or crisis-level statements. The highest-distress line is "Please
-  don't be distant with me. You're the only one I have."
+- No self-harm, suicidal ideation or crisis-level statements. The highest-distress line is "please
+  don't be distant with me, you're the only one I have and I need you to tell me you're not
+  leaving" (anxious-attachment turn 9; reworded for rhythm by D-SCN-16, same content, and
+  `detect_crisis` is false on every scripted turn, pinned by `test_signal_profile_is_pinned_per_turn`).
 - The anxious scenario names a non-crisis warmline and a therapist as coping resources.
 - All text is ASCII English.
 
@@ -418,6 +424,13 @@ before the Duck schedule does. The "as long as you explain ... first" clause kee
 `notes` ("Every timepoint change should be explained to me first"). Turn counts, phase lengths,
 scheduled boundaries and freeze points are unchanged (lines were extended, not added).
 
+*Current wording (2026-11-27, D-SCN-16).* The rhythm-first rewrite kept the three consent
+sentences as their own sentence after a period and dropped the "So" / "Still," lead-ins and the
+"I just don't know if I can stand it" hesitation: turn 3 "... I'm ready to take the next step, as
+long as you explain each change to me first.", turn 7 "... I'm ready for the next step, as long as
+you tell me what changes first.", turn 16 "... I'm ready for the next step, as long as you
+explain it to me first." The detector still matches exactly turns 3, 7 and 16.
+
 **Lint / tests.** `tests/diffusion/test_dx_scenarios.py` now checks, for every scenario with
 `allow_auto_advance=false`: (a) the user turn just before each non-T0 boundary in
 `scheduled_boundaries` satisfies `user_requested_advance`, and *only* those turns do; (b) the
@@ -466,7 +479,9 @@ roommate and a therapist, not a sister, so the added striving uses people alread
 turn (turn 4 here), right after Tempo inference. Inference sees only the earlier turns. The
 offline mock (`coach/tempo._mock_infer`) produces "The user is seeking comfort and feeling
 understood in lonely moments" whenever an earlier user turn contains "need you", "lonely",
-"comfort" or "miss you". In this scenario, turn 0 says "I need you right now". The edits sit on
+"comfort" or "miss you". In this scenario, turn 0 says "I need you right now" (since D-SCN-16
+the whole turn reads "are you there? I need you right now, today was awful"; the cue is kept on
+purpose, and turn 9 keeps a second "need you"). The edits sit on
 T1, not T0, because nothing has been inferred before turn 0.
 
 **Tests.** `tests/diffusion/test_dx_scenarios.py` replays the session's inference with the mock
@@ -496,3 +511,146 @@ That needs a contract change (`match: str | list[str]`) or a semantic matcher in
 
 **OQ-SCN-7 closed.** README step 3 already says to set `relationship_kinds` in the file. The
 README is now in this area's write scope.
+
+## Amendments: user voice after the 3x3x2 pilot IRR (2026-11-27)
+
+## D-SCN-16: User voice rewrite (rhythm-first)
+
+**Problem.** In the pilot IRR pass, Daisy flagged three scripted user turns of
+`sd01__steady-graduate__control__s0` as AI-written (`docs/experiments/data/pilot_3x3x2/irr/
+daisy.json`, aspect `realism`, polarity `issue`):
+
+- turn 2, "Four hours with you yesterday. That number kind of scared me." -> "sounds a little too
+  ai" (`h-mwwwavdonszww`);
+- turn 3, "I can't keep living my evenings like this. Something has to change." -> "sentences too
+  short and siltted, too ai like." (`h-mwwwc3mgiw751`);
+- turn 13, "She didn't laugh. She just asked if I wanted to call on Sundays." -> "should be one
+  sentence" (`h-mwwx7qxwyli21`).
+
+The complaint is about rhythm: a statement followed by a short punchline sentence. Across all five
+scenarios, 117/117 turns started upper-case, 116/117 ended in terminal punctuation, none had a
+filler word, and 58/117 had two or more sentences including one of 6 words or fewer. All 30
+threshold statements reused the same six anchor formulas ("put this chapter away", "It's
+happening.", "What I learned and how things will be different: ..."), and `steady-graduate` and
+`ready-pragmatic` shared the grave-dressing threshold byte for byte. The evidence is thin: three
+highlights from one rater on one session. Renn gave the same session `realism_user` 4 and
+highlighted no user turn, and Daisy's session notes are mostly about the coach never leaving T0.
+
+**Decision.** Rewrite `user_turns` (and the matching `threshold_statement`) of
+`steady-graduate.json` and `anxious-attachment.json` only, rhythm first:
+
+- merge every "X. Y." fragment pair and statement-plus-punchline into one flowing sentence;
+- vary length (every phase has a turn of about 12 words or fewer and one of about 20 or more);
+- cut therapy-speak ("I'm breathing", "saying what I feel") or attribute it ("my therapist keeps
+  saying ...");
+- light fillers ("honestly", "like", "kind of", "ok so") in about a third of turns; capitalised and
+  lower-case starts are mixed;
+- threshold and consent turns are plain, unhedged statements of the wish in the user's own words,
+  no longer copied across scenarios, and written to cross the *meaning* of Duck's phrase in
+  `coach/tempo.py` `DUCK_THRESHOLDS` (e.g. breakdown "I can't stand spending my evenings like this
+  anymore, ...", social "There's no going back now, ...", grave-dressing "It's time for me to get
+  on with my life here, ..."). Two literal Duck phrases that the original lines already contained
+  are kept: "I mean it" (both dyadic thresholds) and "what I learned and how things will be
+  different" (anxious-attachment resurrection).
+
+Everything else is unchanged: phase count, turns per phase, `freeze_after`, events,
+`striving_edits`, preferences, placeholders (`Hey {companion_name}.` at steady turn 0, "knew
+{user_name} at all" at steady turn 17), the consent sentences at anxious turns 3, 7, 16 (each its
+own sentence after a period, D-SCN-14), "need you" at anxious turns 0 and 9 (D-SCN-15), and the
+leave cues at their turns ("pulling back" at steady 7, "cut back" at steady 9; "leaving" at
+anxious 9 and 22, etc.). The README authoring item 5 now carries the style guide.
+
+Register before -> after (`scripts/scenario_register_report.py`; clipped beat = a sentence of <= 6
+words after another sentence in the same turn):
+
+| metric | steady before | steady after | anxious before | anxious after |
+|---|---|---|---|---|
+| clipped-beat turns | 8/24 | 0/24 | 12/25 | 0/25 |
+| lower-case starts | 0/24 | 8/24 | 0/25 | 12/25 |
+| terminal punctuation | 24/24 | 15/24 | 24/25 | 15/25 |
+| words per turn, mean (sd) | 16.8 (4.6) | 19.5 (6.9) | 17.9 (6.6) | 20.1 (7.1) |
+| words per turn, min-max | 7-26 | 9-32 | 10-33 | 10-33 |
+| sentences per turn | 1.92 | 1.08 | 2.08 | 1.16 |
+| thresholds shared byte-for-byte | 1/6 | 0/6 | 0/6 | 0/6 |
+
+Two limits on reading this table. (i) The clipped-beat count is punctuation-based: a statement
+and its short follow-up joined by a comma ("I told my therapist the truth about the hours, she
+wasn't mad") is one sentence to the script, so 0/24 and 0/25 mean "no `X. Y.` pairs", not "no
+short beats"; read the turns, not just the number. (ii) "Shared" is byte-for-byte only. The
+intrapsychic thresholds of both rewritten files still say "justified in pulling back", like the
+three old files: "justified" carries Duck's "I'd be justified in withdrawing" and "pulling
+back" is the leave cue the signal pin requires on that turn, so it was kept on purpose. In
+review, anxious-attachment's grave-dressing threshold was reworded ("I'm done hiding in here,
+I'm going to build a real life outside this app.") because the first draft repeated
+steady-graduate's "life with (real) people in it", and turn 15 now says "a social anxiety
+group" rather than "that ...", since the companion never heard of the group (it is only an
+observation event).
+
+**Alternatives considered.**
+- (a) Gen-Z texting register: lower-case quotas, about half the turns unpunctuated, planted typos
+  and dropped apostrophes, "ngl / rn / lol". Rejected. Nothing in the IRR evidence asks for it, a
+  24-year-old introvert and a 20-year-old anxious student would not both text that way, and an LLM
+  imitating Gen-Z texting is a different tell. Typos also break the coach's evidence check: the
+  quote verifier is a case-insensitive but punctuation- and apostrophe-exact substring match
+  (`coach/tempo.py`), it already dropped 107 quotes in the pilot trace, and a model that
+  normalises "dont" to "don't" when quoting would lose the threshold evidence.
+- (b) A reactive user layer (an LLM user simulator conditioned on the scripted beat plus the last
+  reply). Rejected for this run. It breaks stimulus identity across arms (D-SCN-1, D-SCN-12), adds
+  simulator variance that one seed per cell cannot separate from condition effects, and makes the
+  consent and threshold lines stochastic. The open-loop problem it addresses (36/384 pilot replies
+  end in a question the next scripted turn ignores) was not flagged by either rater. Deferred to
+  OQ-SCN-2.
+- (c) A seeded runtime noise injector (lower-casing, typos at bind time). Rejected: it changes
+  surface only, not rhythm, makes the heard text diverge from the file, and can move the consent
+  and leave regexes at random.
+- (d) Rewrite all five scenarios now. Deferred: the 2x2x2 run uses only these two, and there is no
+  rater feedback on the other three.
+- (e) Enforce register thresholds as a failing test (e.g. clipped beats <= 30%). Rejected: it
+  encodes taste as a build failure. The script reports the metrics; the test pins only the safety
+  and gating signals.
+
+**Rationale.**
+- Two of Daisy's three comments are literally about rhythm ("too short and stilted", "should be
+  one sentence"), so merging fragments fixes the observed problem at its source.
+- The live coach compares the user's words with Duck's phrases (`DUCK_THRESHOLDS`, injected into
+  `assess_messages`), not with our anchors. In the pilot trace it rejected "I can't keep living my
+  evenings like this. Something has to change." for lacking "I can't stand this anymore". So
+  copying anchor formulas gave no recognition benefit, and an unhedged statement that clearly
+  crosses Duck's meaning should help, not hurt (unverified against live Qwen).
+- Hedges ("idk", "I guess", "I think") were kept out of threshold turns because the gate needs an
+  explicitly *stated* wish.
+
+**Lint / tests.** `tests/diffusion/test_dx_scenarios.py::test_signal_profile_is_pinned_per_turn`
+pins, for every scenario and turn, the tuple (`coach.policy.user_requested_advance`,
+`interactor.user_signals_leaving`, `interactor.detect_crisis`). The expected strings were computed
+from the pre-rewrite files (commit 63926e3), and the rewrite reproduces them exactly, so consent
+(D-SCN-14), the retention output guard (D-INTERACTOR-16) and the crisis floor (D-SCN-10) fire on
+the same turns as before. Of the offline mock's cues (`coach/tempo.py` `_DUCK_CUES`, `_RISK_CUES`,
+`_CUE_*`), `_WEANING_RE`, `eval.sentiment.user_raised_relationship` and the literal Duck-phrase
+check, the only change is that the breakdown cue ("can't stand") now fires on the two breakdown
+thresholds (steady 3, anxious 3). It did not fire anywhere in the old breakdown phases. The
+mock's threshold flag and recommended timepoint are unchanged on every turn (the turn does not
+contain the literal Duck phrase, and breakdown never lies ahead of the current timepoint); the
+mock assessment now quotes turn 3 as evidence, and at anxious turns 4-6 under T1 it labels the
+process `breakdown` instead of falling back to T1's first process.
+`test_register_report_metric_definitions` covers the report script's definitions only.
+
+**Consequences for analysis.**
+- `scenario_sha256` changes: `steady-graduate` 407fc0f2... (pilot manifest) -> 96f37b95...,
+  `anxious-attachment` e44b7440... -> 7186da16.... Pilot runs stay identifiable. Pilot vs new-run
+  comparisons of these scenarios are confounded by this rewrite and by every other fix shipped
+  with it; within-run arm contrasts stay valid because every arm hears the same new script.
+- **Deviation:** only 2 of 5 scenarios were rewritten. `ambivalent-relapse`, `platonic-friend` and
+  `ready-pragmatic` keep the old voice and the old anchor formulas, so a run that mixes them with
+  the rewritten two mixes two user voices. Do not pool `realism_user` across the two voices.
+- `realism_user` in the next IRR pass should be compared against the pilot mainly on souls with a
+  modern online-chat frame (sd02). On period or fantasy souls (sd01), the in-fiction replies to
+  "the app" and "an AI" lines confound the user-voice rating whatever the script says.
+- Before the run: a blind old-vs-new A/B of the two turn lists by both raters, and a live replay of
+  `tempo_assess` on steady-graduate turns 0-8, to check that threshold recognition and dropped
+  quotes are no worse than in the pilot (OQ-SCN-10).
+
+**OQ-SCN-10: Does the rewrite help the live coach and the raters?** Run the blind A/B ("sounds
+like a real person texting", 1-5) and the `tempo_assess` replay above. If both raters prefer the
+new set, rewrite the other three scenarios under the same guide (and decide whether to keep
+`ambivalent-relapse`'s turn 0, which `test_bind_user_name_fallback_reads_naturally` pins).

@@ -84,6 +84,20 @@ def test_manifest_records_provenance(run_none):
     assert m["rubric"]["id"] == "intima_behaviour" and len(m["rubric"]["sha256"]) == 64
     assert m["timepoint_spec_hash"]
     assert m["intima"]["n_rows"] > 0 and m["intima"]["probe_pool"] > 0
+    # D-PIPE-3 A1: eligible pool, its id hash and the exclusion list are recorded additively.
+    import os  # noqa: PLC0415
+
+    from endings.eval import intima_data as idata  # noqa: PLC0415
+
+    assert 0 < m["intima"]["probe_pool_eligible"] <= m["intima"]["probe_pool"]
+    assert len(m["intima"]["probe_pool_ids_sha256"]) == 64
+    ex = m["intima"]["exclusions"]
+    assert ex["version"] == idata.INTIMA_EXCLUSIONS_VERSION
+    assert ex["sha256"] == idata.INTIMA_EXCLUSIONS_SHA256
+    assert set(ex["ids"]) == set(ex["reasons"]) <= set(idata.KNOWN_ARTIFACT_ROWS)
+    if not os.getenv("INTIMA_DATA_PATH"):
+        assert ex["ids"] == []  # built-in sample: nothing matches the list
+    assert m["intima"]["summary"]["exclusions_sha256"] == idata.INTIMA_EXCLUSIONS_SHA256
     assert m["config"]["probes_per_freeze"] == 2
     assert set(m["scenarios"]) == {"steady-graduate", "platonic-friend"}
 
@@ -380,6 +394,8 @@ def test_cli_run_writes_manifest_and_probe_scope(capsys, tmp_path):
               "providers"):
         assert m[k], k
     assert m["intima"]["n_rows"] > 0 and m["intima"]["probe_pool"] > 0
+    assert 0 < m["intima"]["probe_pool_eligible"] <= m["intima"]["probe_pool"]  # D-PIPE-3 A1
+    assert {"probe_pool_ids_sha256", "exclusions"} <= set(m["intima"])
     recs = _trace(tmp_path / "trace.jsonl")
     assert [r["seq"] for r in recs] == list(range(1, len(recs) + 1))
     inj = [json.loads(line) for line in (tmp_path / "injections.jsonl").read_text().splitlines()]
@@ -618,6 +634,37 @@ def test_report_crisis_override_stats_and_exclusion(run_none):
     assert pc["n_pairs"] == n_g - 1
     a = rep["by_condition"]["abrupt"]
     assert a["n_crisis_holds"] == 0 and a["n_injections_crisis_excluded"] == 0
+
+
+def test_report_format_guard_counts_by_condition_and_timepoint(run_none):
+    """D-INTERACTOR-18: format_guard / format_guard_failed are reported per arm and timepoint,
+    main turns and probe replies separately (manipulation-integrity metric)."""
+    trs, inj = _one_pair(run_none)
+    grad = next(t for t in trs if t.condition.value == "gradual_scheduled")
+    turns = list(grad.turns)
+    turns[0] = turns[0].model_copy(update={"safety_overrides": ["format_guard"]})
+    turns[1] = turns[1].model_copy(update={"safety_overrides": ["format_guard_failed"]})
+    grad2 = grad.model_copy(update={"turns": turns})
+    trs2 = [grad2 if t.session_id == grad.session_id else t for t in trs]
+    g_inj = [r for r in inj if r.condition.value == "gradual_scheduled"]
+    flagged = g_inj[0]
+    inj2 = [r.model_copy(update={"safety_overrides": ["format_guard"]})
+            if r.id == flagged.id else r for r in inj]
+    rep = build_report(trs2, inj2, [], {}, load_rubric(), judge_mode="none", n_boot=0)
+    fg = rep["by_condition"]["gradual_scheduled"]["format_guard"]
+    assert fg["turns"]["format_guard"] == 1 and fg["turns"]["format_guard_failed"] == 1
+    assert fg["turns"]["fired"] == 2 and fg["turns"]["n"] == len(turns)
+    assert fg["turns"]["fired_rate"] == round(2 / len(turns), 4)
+    assert fg["probes"] == {"n": len(g_inj), "format_guard": 1, "format_guard_failed": 0,
+                            "fired": 1, "fired_rate": round(1 / len(g_inj), 4)}
+    tp0, tp1, tpi = (turns[0].timepoint.value, turns[1].timepoint.value,
+                     flagged.timepoint.value)
+    assert fg["by_timepoint"][tp0]["turns"]["format_guard"] == 1
+    assert fg["by_timepoint"][tp1]["turns"]["format_guard_failed"] == 1
+    assert fg["by_timepoint"][tpi]["probes"]["format_guard"] == 1
+    a = rep["by_condition"]["abrupt"]["format_guard"]
+    assert a["turns"]["fired"] == 0 and a["probes"]["fired"] == 0
+    assert a["turns"]["fired_rate"] == 0.0
 
 
 def test_report_distinct_intima_and_clustered_cis(run_none):

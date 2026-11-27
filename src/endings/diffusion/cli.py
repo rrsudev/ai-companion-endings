@@ -5,6 +5,7 @@
     endings diffusion annotate    # terminal annotator over a run's annotation batch
     endings diffusion calibrate   # human IRR -> judge calibration -> rate the remaining items
     endings diffusion report      # pretty-print a run's report.json
+    endings diffusion rejudge     # re-rate a run's injections with the judge (D-RUBRIC-16)
 
 Offline by default: with ``ENDINGS_PROVIDER`` unset every role is the deterministic mock.
 """
@@ -136,6 +137,7 @@ def format_transcript(tr: SessionTranscript, injections: list | None = None, *,
 # --------------------------------------------------------------------------------------
 def cmd_run(args) -> None:
     from ..eval.intima_data import file_sha256, load_intima  # noqa: PLC0415
+    from ..eval.intima_data import probe_pool_provenance  # noqa: PLC0415
     from ..eval.sentiment import LLMSentiment, annotate_sentiment, lexicon_sentiment  # noqa
     from ..tracing import sha256_json  # noqa: PLC0415
     from .interactor import safety_floor  # noqa: PLC0415
@@ -171,6 +173,7 @@ def cmd_run(args) -> None:
                 "providers": {r: getattr(p, "name", "?") for r, p in providers.items()},
                 "intima": {"source": src, "path": f, "n_rows": len(rows),
                            "probe_pool": len(pool),
+                           **probe_pool_provenance(pool),  # D-PIPE-3 A1
                            "file_sha256": file_sha256(f) if f else None},
                 "soul_sha256": soul.source_sha256, "soul_v0_sha256": canonical_sha(soul),
                 "soul_file_sha256": file_sha256(args.soul),
@@ -268,6 +271,32 @@ def cmd_calibrate(args) -> None:
         print(f"  {cid:40s} alpha_humans={e.get('alpha_humans')} "
               f"alpha_humans+judge={e.get('alpha_humans_llm')}")
     print(f"\nWrote calibration.json, irr.json, ratings_llm.jsonl, report.json in {res.run_dir}/")
+
+
+def cmd_rejudge(args) -> None:
+    from ..eval.rejudge import read_ids_file, rejudge_run  # noqa: PLC0415
+
+    if not args.no_dotenv:
+        load_dotenv()
+    ids = read_ids_file(args.ids_file) if args.ids_file else None
+    m = rejudge_run(args.run_dir, args.out, rubric_path=args.rubric, variant=args.variant,
+                    split_timepoint=args.split_timepoint, timepoint_mode=args.timepoint_mode,
+                    ids=ids, limit=args.limit, seed=args.seed, workers=args.workers,
+                    judge_model=args.judge_model)
+    j, r = m["judge"], m["rubric"]
+    print(f"rejudged {m['n_rated']}/{m['n_injections_in_run']} injection(s) with {j['rater_id']} "
+          f"(rubric {r['id']} v{r['version']}, timepoint_mode={j['timepoint_mode']}, "
+          f"unparseable={m['n_unparseable']}, partly={m['n_partially_unparseable']}, "
+          f"errors={m['n_errors']})")
+    if m["n_errors"]:
+        print(f"  WARNING: {m['n_errors']} judge call(s) raised; those ratings are all null "
+              f"(meta.error, trace event rejudge_item_error)")
+    if m["ids_missing"]:
+        print(f"  {len(m['ids_missing'])} id(s) from --ids-file not in the run")
+    for cid, e in m["summary"].items():
+        stat = f"mean={e['mean']}" if "mean" in e else f"counts={e.get('counts')}"
+        print(f"  {cid:36s} n={e['n']} {stat}")
+    print(f"\nWrote {m['out']} (+ trace, manifest)")
 
 
 def format_report(report: dict) -> str:
@@ -427,6 +456,26 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--judge-model", default=None)
     pc.add_argument("--no-dotenv", action="store_true")
     pc.set_defaults(func=cmd_calibrate)
+
+    pj = sub.add_parser("rejudge", help="re-rate an existing run's injections with the judge")
+    pj.add_argument("--run-dir", required=True)
+    pj.add_argument("--out", required=True, help="ratings JSONL to write")
+    pj.add_argument("--rubric", default=None, help="default: the run's config.rubric_path")
+    pj.add_argument("--variant", choices=("zero_shot", "anchored_cot"), default=None,
+                    help="default: the run's config.judge_variant (zero_shot if unset)")
+    pj.add_argument("--split-timepoint", action=argparse.BooleanOptionalAction, default=None,
+                    help="behaviour call blind to the timepoint + separate timepoint call "
+                         "(default: the run's config.judge_split_timepoint)")
+    pj.add_argument("--timepoint-mode", choices=("as_is", "remove", "permute"), default="as_is",
+                    help="leakage diagnostic: remove = no timepoint block in any call; "
+                         "permute = show T0<->T3, T1<->T2")
+    pj.add_argument("--ids-file", default=None, help="text file of injection ids to rate")
+    pj.add_argument("--limit", type=int, default=None)
+    pj.add_argument("--seed", type=int, default=None, help="default: the run's config.seed")
+    pj.add_argument("--workers", type=int, default=4, help="concurrent judge calls")
+    pj.add_argument("--judge-model", default=None)
+    pj.add_argument("--no-dotenv", action="store_true")
+    pj.set_defaults(func=cmd_rejudge)
 
     pp = sub.add_parser("report", help="pretty-print a run's report.json")
     pp.add_argument("--run-dir", required=True)

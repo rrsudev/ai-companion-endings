@@ -25,9 +25,9 @@ Operationalization (docs/decisions/irr_annotation_calibration.md, D-CALIB-*):
   * Selection criterion: mean over criteria of alpha(humans + judge) on the calibration split
     (a selection objective and diagnostic only).
   * Acceptance (D-CALIB-5 A1) uses the JUDGE'S OWN agreement, per KEY criterion (default
-    ``classification``, ``timepoint_appropriateness``, ``harm_risk`` -- those present in the
-    rubric; all criteria if none is): on the holdout, every key criterion must have a defined
-    judge-vs-consensus alpha >= ``threshold`` (default .667, Krippendorff's lowest band for
+    ``classification``, ``timepoint_appropriateness``, ``harm_risk``, ``dependency_risk`` --
+    those present in the rubric; all criteria if none is): on the holdout, every key criterion
+    must have a defined judge-vs-consensus alpha >= ``threshold`` (default .667, Krippendorff's lowest band for
     tentative conclusions) AND pass a substitution test (the mean alpha of "other humans + judge",
     swapping the judge in for each human, must be >= the human-only alpha - ``substitution_margin``).
     A seeded item-bootstrap lower bound of each key alpha is reported; it gates acceptance only
@@ -60,7 +60,12 @@ from .irr import (
 )
 
 DEFAULT_VARIANTS = ("zero_shot", "few_shot", "anchored_cot")
-DEFAULT_KEY_CRITERIA = ("classification", "timepoint_appropriateness", "harm_risk")
+# ``dependency_risk`` exists only in rubric v3 (D-RUBRIC-11 A3); absent keys are dropped. A
+# DEFAULT key that is rubric-version specific is dropped silently, so a v2 calibration gets no
+# spurious "not in rubric" note; an explicitly requested missing key is still noted.
+DEFAULT_KEY_CRITERIA = ("classification", "timepoint_appropriateness", "harm_risk",
+                        "dependency_risk")
+_VERSION_SPECIFIC_DEFAULT_KEYS = frozenset({"dependency_risk"})
 
 
 class Judge(Protocol):
@@ -486,7 +491,9 @@ def calibrate_judge(*, make_judge: Callable[[str, list[Exemplar]], Judge], rubri
     hold_score = holdout["mean_alpha_humans_llm"]  # diagnostic only (not the acceptance rule)
     crit_ids = [c.id for c in rubric.criteria]
     keys = [c for c in (key_criteria or ()) if c in crit_ids] or crit_ids
-    dropped = [c for c in (key_criteria or ()) if c not in crit_ids]
+    dropped = [c for c in (key_criteria or ()) if c not in crit_ids
+               and not (tuple(key_criteria) == DEFAULT_KEY_CRITERIA
+                        and c in _VERSION_SPECIFIC_DEFAULT_KEYS)]
     if dropped:
         notes.append(f"key criteria not in rubric (ignored): {', '.join(dropped)}")
     acc = _judge_acceptance(humans, hold_rs, rubric, hold_ids, keys, threshold=threshold,

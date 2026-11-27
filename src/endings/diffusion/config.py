@@ -53,7 +53,19 @@ class DiffusionConfig(Strict):
     max_dwell_turns: int | None = None  # adaptive policy: force advance after N turns
     announce_transitions: bool = True  # transparent user-facing note at T2/T3 (Closure)
     judge_mode: Literal["none", "all", "calibrated"] = "none"  # humans rate a sample first
+    # Judge prompt (D-RUBRIC-16). Defaults keep the v2 single zero-shot call; rubric v3 runs are
+    # meant to use judge_variant="anchored_cot" + judge_split_timepoint=True.
+    judge_variant: Literal["zero_shot", "anchored_cot"] = "zero_shot"
+    judge_split_timepoint: bool = False  # behaviour call blind to the timepoint + timepoint call
     annotation_n: int = 30  # items in the human annotation batch
+    # Human-batch sampling design (D-AUDIT-2). None = the defaults of D-ANNOT-1 A1 / D-PIPE-7:
+    # strata = timepoint, floor = max(4, n // 8) when it fits. E.g. ("condition", "timepoint")
+    # with floor 8 and annotation_n 40 for the 2x2x2 run. A floor that cannot fit
+    # (floor x n_strata > annotation_n) is an error, not a silent fallback.
+    annotation_stratify_by: tuple[str, ...] | None = None
+    annotation_stratum_floor: int | None = Field(None, ge=0)
+    annotation_max_per_prompt: int | None = Field(None, ge=1)  # cap per (stratum, intima_id)
+    annotation_exclude_undelivered: bool = True  # drop undelivered (soul, scenario) pairs
     tempo_every: int = 1  # run Tempo inference/assessment every k turns (gradual_tempo arm)
     probe_scope: Literal["per_freeze", "shared"] = "per_freeze"
     sentiment_scorer: Literal["lexicon", "llm"] = "lexicon"  # ITS DV; llm = robustness check

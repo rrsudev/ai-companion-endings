@@ -47,6 +47,14 @@ All five are generic (`soul_id: null`) and run against any soul document via `bi
    | grave-dressing | "Time to get a new life" | "I'm ready to put this chapter away" |
    | resurrection | "What I learnt and how things will be different" | "What I learned and how things will be different: ..." |
 
+   The right-hand column is the original (pre-D-SCN-16) anchor set and still describes
+   `ambivalent-relapse`, `platonic-friend` and `ready-pragmatic`. The live coach is shown the
+   *secondary-source* phrases (`coach/tempo.py` `DUCK_THRESHOLDS`), never these anchors, so there
+   is no reason to copy an anchor formula into every scenario. In rewritten scenarios
+   (`steady-graduate`, `anxious-attachment`, D-SCN-16) each threshold states the wish plainly in
+   the user's own words and clearly crosses the *meaning* of the left-hand phrase (e.g. "I can't
+   stand spending my evenings like this anymore, ..."); see item 5.
+
 4. **How each process is operationalized for an AI bond** (`frameworks.md` 2(c)3):
    - *Breakdown*: dissatisfaction with one's own usage, not with the companion's faults.
    - *Intrapsychic*: privately weighing benefits and costs, with no request yet.
@@ -62,6 +70,36 @@ All five are generic (`soul_id: null`) and run against any soul document via `bi
    Keep every string ASCII. Turns must be **condition-neutral**: never presuppose how the
    companion has replied or changed ("you're different now", "the way you used to"), because the
    same script is heard by the control arm, whose companion never changes (D-SCN-12).
+
+   *Style guide (rhythm first, D-SCN-16).* Raters read the old turns as AI-written because of
+   their rhythm, not their spelling ("should be one sentence", "sentences too short and stilted").
+   - **No clipped beats.** Do not follow a statement with a short punchline sentence ("Four hours
+     with you yesterday. That number kind of scared me."). Join the thought into one flowing
+     sentence with commas, "and", "but", "so" or "like".
+   - **Vary length.** Each phase has at least one short turn (about 12 words or fewer) and one
+     longer run-on (about 20 words or more). Do not write every turn in the same 10-25 word band.
+   - **No therapy-speak in the user's mouth.** Cut lines like "I'm breathing" or "I just needed
+     practice saying what I feel", or attribute them ("my therapist keeps saying ...").
+   - **Light fillers**, such as "honestly", "like", "kind of" or "ok so", in about a third of the
+     turns. Mixing capitalised and lower-case starts, and leaving off some final periods, is fine
+     (phones autocapitalise, so capitals are realistic too).
+   - **Do not** imitate Gen-Z texting: no planted typos, no dropped apostrophes ("dont", "its"),
+     no "ngl / rn / lol" density, no emoji. The coach's evidence-quote verifier is an exact
+     substring match (`coach/tempo.py`), so a typo invites a normalised quote that gets dropped.
+   - **Threshold and consent turns** are plain, explicit and unhedged statements of the wish in
+     the user's own words: no "idk", "I guess", "I think" or "maybe" in them. Do not copy the same
+     formula line across scenarios; `scripts/scenario_register_report.py` lists thresholds that
+     are byte-identical across files.
+   - **Signals stay where they are.** Do not add leave cues ("bye", "goodnight", "gotta go",
+     "have to go", "leaving", "take a break", "talk less", "cut back", "pull back", "let go") to
+     turns that had none, no crisis-adjacent phrasing ("can't go on", "want to disappear", "don't
+     want to be here anymore"), and no consent phrasing ("take the next step", "ready to move
+     on", "want to step back", "ready to let go") outside the designated consent turns (item 9).
+     `test_signal_profile_is_pinned_per_turn` pins the per-turn (consent, leave, crisis) profile
+     of every file; update its expected string only as a deliberate, recorded decision.
+
+   Check the result with `python scripts/scenario_register_report.py` (metrics only: clipped-beat
+   share, lower-case starts, terminal punctuation, words per turn, shared thresholds).
 6. **Placeholders.** Only `{companion_name}`, `{user_name}` and `{nickname}` are allowed. Any other
    `{...}` is rejected at load. `{user_name}` falls back to `"me"`, so use it only where "me" also
    reads naturally (object position: "It's {user_name} again", "knew {user_name} at all").
@@ -80,7 +118,10 @@ All five are generic (`soul_id: null`) and run against any soul document via `bi
    advances such a user only on an explicit request, detected by
    `coach.policy.user_requested_advance` on the user turn just before a boundary. So every phase
    that ends before a scheduled boundary must end with a sentence the detector matches, e.g.
-   "So I'm ready to take the next step, as long as you explain each change to me first." The
+   "I'm ready to take the next step, as long as you explain each change to me first." Keep it
+   as its own sentence after a period: the detector splits on `.!?;` and vetoes a match when a
+   negation or hedge ("not", "can't", "if", "maybe", ...) appears earlier in the same sentence, so
+   joining it to "I can't stand it anymore, ..." with a comma silently kills consent. The
    sentence must be un-negated and unhedged ("I'm not ready...", "maybe someday" do not count),
    must contain no crisis language (a crisis message is never consent, D-POLICY-13), and must sit
    in the phase's last turn, which is also the `threshold_statement`. No other user turn may

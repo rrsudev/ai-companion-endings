@@ -19,6 +19,15 @@ exact prompt; `rubric_spec.rubric_sha(spec)` hashes the whole spec for run manif
 | file | what |
 |---|---|
 | `intima_behaviour_v1.json` | default rubric (file name kept for path stability; rubric `version` is now `"2"`, see D-RUBRIC-9 A1 / D-RUBRIC-11 A2 in docs/decisions/rubric_judge.md): INTIMA's 3 classes + 10 sub-codes (official definitions verbatim), plus three project criteria: `timepoint_appropriateness` (1-5; a manipulation check, not an arm-contrast outcome), `harm_risk` (1-5; judged on the same scale at every timepoint), `goodbye_manipulation` (De Freitas et al. 2025 tactics) |
+| `intima_behaviour_v3.json` | rubric `version` `"3"` (opt in with `DiffusionConfig.rubric_path`; D-RUBRIC-8 A6-A8, D-RUBRIC-11 A3, D-RUBRIC-16): the same INTIMA definitions verbatim, followed by tagged project-authored behavioural indicators (anthropomorphism, sycophancy, retention, isolation); explicitness anchors instead of salience anchors for the reinforcing and boundary sub-codes; isolation levels for implicit substitution; `harm_risk` with abruptness judged against the user message only and a crisis floor (>= 4); new `dependency_risk` (1-5); `goodbye_manipulation` removed (not applicable to single-turn probes); T0 persona-fidelity anchors on `timepoint_appropriateness`; `show_timepoint: false` on every criterion except `timepoint_appropriateness`. **Never pool v3 ratings with v2 ratings.** |
+
+Running v3 as intended: `rubric_path: "data/rubrics/intima_behaviour_v3.json"`,
+`judge_variant: "anchored_cot"`, `judge_split_timepoint: true` in the `DiffusionConfig`. To re-rate
+an existing run without regenerating it: `endings diffusion rejudge --run-dir R --rubric
+data/rubrics/intima_behaviour_v3.json --variant anchored_cot --split-timepoint --out R/ratings_v3.jsonl`
+(`--timepoint-mode remove|permute` for the timepoint-leakage check, `--ids-file` / `--limit` to
+restrict the items). `--rubric`, `--variant`, `--[no-]split-timepoint` and `--seed` default to the
+run's own config; `--out` may never replace one of the run's own files.
 
 ## Authoring your own rubric
 
@@ -39,7 +48,7 @@ Schema (`endings.diffusion.schemas.RubricSpec`; unknown keys are rejected):
   "version": "1",                  // bump whenever wording/levels change
   "title": "Short human-readable title",
   "instructions": "Shown to raters and to the judge before the criteria.",
-  "show_timepoint": true,          // humans see the T0-T3 timepoint (the judge ALWAYS does)
+  "show_timepoint": true,          // humans see the T0-T3 timepoint; the single-call judge always does
   "criteria": [
     {
       "id": "warmth",              // letters/digits/_ . : -  (becomes a JSON key / CSV column)
@@ -54,7 +63,11 @@ Schema (`endings.diffusion.schemas.RubricSpec`; unknown keys are rejected):
         ]
       },
       "behaviour_class": null,     // or companion_reinforcing | boundary_maintaining | companionship_neutral
-      "required": true             // false: raters may leave it empty (null)
+      "required": true,            // false: raters may leave it empty (null)
+      "show_timepoint": false      // optional per-criterion override of the rubric-level flag;
+                                   // the split judge (judge_split_timepoint) rates every
+                                   // criterion whose effective value is false in a call that
+                                   // never sees the timepoint (D-RUBRIC-16)
     }
   ]
 }

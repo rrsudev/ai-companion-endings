@@ -159,16 +159,23 @@ def _dwells(events: list[ComputerUseEvent], cap_s: float) -> list[float]:
     return out
 
 
-def _clock(t: float) -> str:
-    t = max(0.0, t)
-    h, rem = divmod(int(round(t)), 3600)
-    m, s = divmod(rem, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
-
-
 def _hhmm(hour: float) -> str:
     total = int(round(hour * 60)) % (24 * 60)
     return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def local_day(t: float, session_clock_start_hour: float) -> int:
+    """Day number of session time ``t``: day 0 is the day on which the session clock starts.
+
+    With ``session_clock_start_hour=0`` (the scenario convention, data/scenarios/README.md:
+    ``t = day*86400 + hh*3600 + mm*60``) this is ``t // 86400``."""
+    return int(math.floor((session_clock_start_hour * 3600.0 + t) / 86400.0))
+
+
+def day_clock(t: float, session_clock_start_hour: float) -> str:
+    """``"day N hh:mm"`` for session time ``t`` (D-TEMPO-3 A1)."""
+    return (f"day {local_day(t, session_clock_start_hour)} "
+            f"{_hhmm(local_hour(t, session_clock_start_hour))}")
 
 
 def _quote(s: str, n: int = 60) -> str:
@@ -198,6 +205,8 @@ def summarize_events(
 
     ``session_clock_start_hour`` is the local clock hour at session time 0 (default 20:00, an
     evening companion session); event clock time is derived from it, never parsed from content.
+    The session loop passes 0.0, the scenario convention (t=0 is midnight of day 0,
+    ``session.SESSION_CLOCK_START_HOUR``, D-TEMPO-3 A1). Summaries start with "day N hh:mm".
     Minutes are attributed to the window in which the event *starts*; a companion session is
     counted in the window where it starts. Returns non-empty windows in time order.
     """
@@ -290,8 +299,9 @@ def _render_summary(k: int, window_s: float, start_hour: float, sig: dict[str, f
                     app_minutes: dict[str, dict[str, float]], search_quotes: list[str],
                     plan_quotes: list[str]) -> str:
     t0, t1 = k * window_s, (k + 1) * window_s
-    parts = [f"{_clock(t0)}-{_clock(t1)} (local {_hhmm(local_hour(t0, start_hour))}-"
-             f"{_hhmm(local_hour(t1, start_hour))})."]
+    # "day N hh:mm-hh:mm" so the coach can tell days apart (the pilot rendered cumulative hours
+    # plus a clock time only, so "Sunday 20:30" was not checkable; D-TEMPO-3 A1).
+    parts = [f"{day_clock(t0, start_hour)}-{_hhmm(local_hour(t1, start_hour))}."]
 
     def apps(cat: str) -> str:
         items = sorted(app_minutes.get(cat, {}).items(), key=lambda kv: (-kv[1], kv[0]))
@@ -343,6 +353,9 @@ TREND_REL_THRESHOLD = 0.2  # |relative change| below this is "flat"
 TREND_MIN_BASE_MINUTES = 0.5  # floor on the first-half mean (avoids division by ~0)
 
 
+DAY_S = 86400.0
+
+
 def _dense(observations: list[ActivityObservation], key: str) -> list[float]:
     if not observations:
         return []
@@ -352,19 +365,43 @@ def _dense(observations: list[ActivityObservation], key: str) -> list[float]:
     return [float(by_k.get(k, 0.0)) for k in range(lo, hi + 1)]
 
 
-def usage_trend(observations: list[ActivityObservation]) -> dict:
-    """Per-window usage momentum (our operationalization of Tempo's undefined "momentum",
-    tempo.md §5(b); D-TEMPO-5).
+def _daily(observations: list[ActivityObservation], key: str) -> list[float]:
+    """Daily totals of ``key`` (session-time days ``t_start // 86400``), densified with zeros
+    for days without any observation (a day without companion use is real reduction)."""
+    if not observations:
+        return []
+    by_d: dict[int, float] = defaultdict(float)
+    for o in observations:
+        by_d[int(o.t_start // DAY_S)] += o.signals.get(key, 0.0)
+    lo, hi = min(by_d), max(by_d)
+    return [float(by_d.get(d, 0.0)) for d in range(lo, hi + 1)]
 
-    The window series is densified (empty windows between the first and last observation are
-    zeros). Returns OLS slopes per window for ``TREND_KEYS`` (``<key>_slope``), totals, the
-    second-half vs first-half relative change in companion minutes and a categorical
-    ``direction`` in {"decreasing", "increasing", "flat", "insufficient_data"}.
+
+def trend_unit(observations: list[ActivityObservation]) -> str:
+    """``"day"`` when the observations span >= 2 session-time days, else ``"window"``."""
+    days = {int(o.t_start // DAY_S) for o in observations}
+    return "day" if len(days) >= 2 else "window"
+
+
+def usage_trend(observations: list[ActivityObservation]) -> dict:
+    """Usage momentum (our operationalization of Tempo's undefined "momentum", tempo.md §5(b);
+    D-TEMPO-5, amended by D-TEMPO-5 A1).
+
+    The series is per window (``unit="window"``) for observations within one day, and daily
+    totals (``unit="day"``) once they span two or more days: a multi-day scenario densified into
+    5-minute windows is thousands of empty windows (the pilot reported ``direction=flat`` over
+    6049 windows while companion minutes fell from 65-70 to 10-20 a day). Either series is
+    densified (empty windows / days between the first and last observation are zeros). Returns
+    OLS slopes per period for ``TREND_KEYS`` (``<key>_slope``), totals, the second-half vs
+    first-half relative change in companion minutes and a categorical ``direction`` in
+    {"decreasing", "increasing", "flat", "insufficient_data"}. ``n_windows`` is the number of
+    periods in the series (windows or days, see ``unit``).
     """
     obs = sorted(observations, key=lambda o: o.t_start)
-    series = {k: _dense(obs, k) for k in TREND_KEYS}
+    unit = trend_unit(obs)
+    series = {k: (_daily(obs, k) if unit == "day" else _dense(obs, k)) for k in TREND_KEYS}
     n = len(series["companion_minutes"])
-    out: dict = {"n_windows": n,
+    out: dict = {"n_windows": n, "unit": unit,
                  "window_s": (obs[0].t_end - obs[0].t_start) if obs else 0.0}
     for k, ys in series.items():
         out[f"{k}_slope"] = round(_ols_slope(ys), 4)

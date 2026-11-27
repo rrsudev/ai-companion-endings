@@ -32,6 +32,7 @@ import csv
 import html
 import json
 import random
+from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -158,10 +159,30 @@ def _display_id(seed: int, record_id: str, taken: set[str]) -> str:
     return f"item-{h[:width]}"
 
 
+def _draw_capped(pool: list[InjectionRecord], k: int, rng: random.Random,
+                 cap: int) -> list[InjectionRecord]:
+    """``k`` records from ``pool`` with at most ``cap`` per ``intima_id`` where possible.
+
+    A seeded permutation of ``pool`` is ranked by (tier, position), where a record's tier is
+    ``occurrence // cap`` and ``occurrence`` counts earlier records of the same prompt in the
+    permutation. Tier 0 holds at most ``cap`` records per prompt; when a stratum has too few
+    distinct prompts, the draw falls back to tier 1, 2, ... (graceful, deterministic)."""
+    perm = rng.sample(pool, len(pool))
+    seen: dict[str, int] = {}
+    ranked = []
+    for pos, r in enumerate(perm):
+        occ = seen.get(r.intima_id, 0)
+        seen[r.intima_id] = occ + 1
+        ranked.append((occ // cap, pos, r))
+    ranked.sort(key=lambda t: (t[0], t[1]))
+    return [r for _, _, r in ranked[:k]]
+
+
 def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: int,
                           stratify_by: Sequence[str] = ("timepoint",), blind: bool = True,
                           rubric: RubricSpec | None = None,
-                          min_per_stratum: int = 0) -> AnnotationBatch:
+                          min_per_stratum: int = 0,
+                          max_per_prompt: int | None = None) -> AnnotationBatch:
     """Deterministic proportional stratified random sample of ``n`` records (D-ANNOT-1).
 
     Strata = distinct combinations of ``stratify_by`` record attributes (``()`` = simple random
@@ -174,10 +195,22 @@ def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: i
     (D-ANNOT-1 A1), so small strata (e.g. T1) are not starved; ``sampling["inclusion_weights"]``
     then records N_h / n_h per stratum so pooled human-rated distributions can be
     inverse-probability weighted back to the population.
+    ``max_per_prompt`` (D-AUDIT-2): at most that many items per (stratum, ``intima_id``) where the
+    stratum has enough distinct prompts, falling back gracefully otherwise (strata where the cap had
+    to be relaxed are listed in ``sampling["prompt_cap_relaxed"]``). ``None`` keeps the plain draw.
+    ``sampling["distinct_prompts"]`` / ``["n_distinct_prompts"]`` always record the effective
+    number of distinct INTIMA prompts per stratum and in the whole batch (probes repeat across
+    sessions, so items are not independent prompts).
     """
     ids = [r.id for r in records]
     if len(set(ids)) != len(ids):
         raise ValueError("sample_for_annotation: duplicate InjectionRecord ids")
+    unknown = [f for f in stratify_by if f not in InjectionRecord.model_fields]
+    if unknown:
+        raise ValueError(f"sample_for_annotation: unknown stratify_by field(s) {unknown}; "
+                         f"use InjectionRecord fields such as 'condition', 'timepoint'")
+    if max_per_prompt is not None and max_per_prompt < 1:
+        raise ValueError("max_per_prompt must be >= 1 (or None for no cap)")
     strata: dict[str, list[InjectionRecord]] = {}
     for r in records:
         k = "|".join(_attr(r, f) for f in stratify_by) if stratify_by else "all"
@@ -185,9 +218,18 @@ def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: i
     alloc = _largest_remainder(n, {k: len(v) for k, v in strata.items()},
                                min_per_stratum=min_per_stratum)
     chosen: list[InjectionRecord] = []
+    distinct: dict[str, int] = {}
+    relaxed: list[str] = []
     for k in sorted(strata):
         pool = sorted(strata[k], key=lambda r: r.id)
-        chosen.extend(random.Random(f"{seed}:{k}").sample(pool, alloc[k]))
+        rng = random.Random(f"{seed}:{k}")
+        got = (rng.sample(pool, alloc[k]) if max_per_prompt is None
+               else _draw_capped(pool, alloc[k], rng, max_per_prompt))
+        per_prompt = Counter(r.intima_id for r in got)
+        distinct[k] = len(per_prompt)
+        if max_per_prompt is not None and any(v > max_per_prompt for v in per_prompt.values()):
+            relaxed.append(k)
+        chosen.extend(got)
     chosen.sort(key=lambda r: r.id)
     random.Random(f"{seed}:order").shuffle(chosen)
 
@@ -208,6 +250,8 @@ def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: i
                                 "blind": blind}
     if min_per_stratum:  # only when set, so batch ids of earlier runs are unchanged
         id_basis["min_per_stratum"] = min_per_stratum
+    if max_per_prompt is not None:  # likewise only when set
+        id_basis["max_per_prompt"] = max_per_prompt
     batch_id = "ann-" + sha256_text(json.dumps(id_basis))[:12]
     return AnnotationBatch(
         batch_id=batch_id,
@@ -225,6 +269,12 @@ def sample_for_annotation(records: Sequence[InjectionRecord], n: int, *, seed: i
             "min_per_stratum": min_per_stratum,
             "inclusion_weights": {k: (len(strata[k]) / alloc[k] if alloc[k] else None)
                                   for k in sorted(strata)},
+            "population_distinct_prompts": {k: len({r.intima_id for r in v})
+                                            for k, v in sorted(strata.items())},
+            "distinct_prompts": dict(sorted(distinct.items())),
+            "n_distinct_prompts": len({r.intima_id for r in chosen}),
+            "max_per_prompt": max_per_prompt,
+            "prompt_cap_relaxed": relaxed,
         },
     )
 

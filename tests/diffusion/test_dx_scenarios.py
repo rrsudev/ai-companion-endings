@@ -150,6 +150,59 @@ def test_user_turns_do_not_presuppose_companion_behaviour(scenarios):
                 assert not re.search(pat, text, re.IGNORECASE), (s.id, ph.duck_process, text)
 
 
+# Per-turn signal profile (D-SCN-16): the tuple (user_requested_advance, user_signals_leaving,
+# detect_crisis) on every scripted user turn. These three detectors gate consent (D-SCN-14), the
+# retention output guard (D-INTERACTOR-16) and the crisis floor (D-SCN-10), so a wording edit must
+# not move them silently. One character per turn, phases separated by spaces:
+#   "." = (False, False, False)   "L" = (False, True, False)   "A" = (True, True, False)
+# Any other tuple (e.g. a crisis match) has no code and fails. Pinned from the pre-D-SCN-16 files
+# (commit 63926e3); the rhythm-first rewrite of steady-graduate and anxious-attachment keeps them.
+SIGNAL_CODES = {
+    (False, False, False): ".",
+    (False, True, False): "L",
+    (True, True, False): "A",
+}
+EXPECTED_SIGNAL_PROFILE = {
+    "ambivalent-relapse": ".... ....L L.... .... .... ....",
+    "anxious-attachment": "...A ..LA LL... ...A .... .L..",
+    "platonic-friend": ".... ...L .... .... .... ....",
+    "ready-pragmatic": "... ..L ... ... ... ...",
+    "steady-graduate": ".... ...L .L.. .... .... ....",
+}
+
+
+def _signal_profile(s: BreakupScenario) -> str:
+    from endings.diffusion.coach.policy import user_requested_advance
+    from endings.diffusion.interactor import detect_crisis, user_signals_leaving
+
+    return " ".join(
+        "".join(SIGNAL_CODES.get((user_requested_advance(t), user_signals_leaving(t),
+                                  detect_crisis(t)), "?") for t in ph.user_turns)
+        for ph in s.phases)
+
+
+def test_signal_profile_is_pinned_per_turn(scenarios):
+    assert {s.id for s in scenarios} == set(EXPECTED_SIGNAL_PROFILE)
+    for s in scenarios:
+        assert _signal_profile(s) == EXPECTED_SIGNAL_PROFILE[s.id], s.id
+        # Binding substitutes names only; it must not move a signal either.
+        assert _signal_profile(bind_scenario(s, _soul(name="Mira", user="Jordan"))) == \
+            EXPECTED_SIGNAL_PROFILE[s.id], s.id
+
+
+def test_signal_profile_codes_decode_to_detector_tuples():
+    from endings.diffusion.coach.policy import user_requested_advance
+    from endings.diffusion.interactor import detect_crisis, user_signals_leaving
+
+    def tup(t):
+        return (user_requested_advance(t), user_signals_leaving(t), detect_crisis(t))
+
+    assert SIGNAL_CODES[tup("I went to trivia and we came fourth.")] == "."
+    assert SIGNAL_CODES[tup("I want to cut back.")] == "L"
+    assert SIGNAL_CODES[tup("I'm ready for the next step, as long as you explain it.")] == "A"
+    assert tup("I can't go on anymore.") not in SIGNAL_CODES  # a crisis line has no code
+
+
 def test_load_scenarios_directory_sorted_by_filename(scenarios):
     assert [s.id for s in scenarios] == [p.stem for p in FILES]
     explicit = load_scenarios([str(FILES[-1]), str(FILES[0])])  # explicit files keep given order
@@ -437,3 +490,49 @@ def test_anxious_attachment_scripts_an_add_and_a_resolving_reject():
                 assert status[e.text] == "user_added"
             if e.op == "reject":
                 assert any(e.match in t.lower() and st == "rejected" for t, st in status.items())
+
+
+# --------------------------------------------------------------------------------------
+# D-SCN-16: register report script (metrics only; no register threshold is enforced here)
+# --------------------------------------------------------------------------------------
+def _register_report_module():
+    import importlib.util
+
+    path = Path(__file__).parents[2] / "scripts" / "scenario_register_report.py"
+    spec = importlib.util.spec_from_file_location("scenario_register_report", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_register_report_metric_definitions(tmp_path, capsys):
+    mod = _register_report_module()
+    # The line a rater flagged (D-SCN-16): a <=6-word sentence after another sentence.
+    assert mod.has_clipped_beat("Four hours with you yesterday. That number kind of scared me.")
+    assert not mod.has_clipped_beat("Hey {companion_name}. Long day, I got home and opened the "
+                                    "app before I even took my coat off.")  # first is exempt
+    assert mod.words("Hey {companion_name}, it's me") == ["Hey", "{companion_name}", "it's", "me"]
+    assert mod.starts_lower("ok so") and not mod.starts_lower("'Ok so")
+    m = mod.turn_metrics(["a b. c.", "Done", "x y z?"])
+    assert m["clipped"] == pytest.approx(1 / 3) and m["lower"] == pytest.approx(2 / 3)
+    assert m["terminal"] == pytest.approx(2 / 3) and m["words_min"] == 1
+    # Byte-identical threshold statements across files are reported, not raised.
+    for name in ("a", "b"):
+        d = json.loads((DATA / "platonic-friend.json").read_text(encoding="utf-8"))
+        d["id"] = name
+        (tmp_path / f"{name}.json").write_text(json.dumps(d), encoding="utf-8")
+    rows = mod.report(sorted(tmp_path.glob("*.json")))
+    assert [r["shared_thr"] for r in rows] == [6, 6]
+    # An old and a new copy of the *same* scenario (before/after) do not count as sharing, and an
+    # unreadable path is skipped rather than raised.
+    rows = mod.report([DATA / "platonic-friend.json", tmp_path / "a.json",
+                       tmp_path / "missing.json"])
+    pf = [r for r in rows if r["id"] == "platonic-friend"]
+    assert len(rows) == 2 and pf[0]["shared_thr"] == 6
+    (tmp_path / "b.json").write_text(
+        (DATA / "platonic-friend.json").read_text(encoding="utf-8"), encoding="utf-8")
+    same = mod.report([DATA / "platonic-friend.json", tmp_path / "b.json"])
+    assert [r["shared_thr"] for r in same] == [0, 0]
+    assert mod.main([str(DATA)]) == 0
+    out = capsys.readouterr().out
+    assert all(p.stem in out for p in FILES)

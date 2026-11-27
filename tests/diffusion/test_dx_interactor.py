@@ -573,3 +573,157 @@ def test_truncated_reply_flag_from_finish_reason():
     r3 = _say(_Script(["<think>x</think>", "ok"], metas=[{"finish_reason": "length"},
                                                         {"finish_reason": "stop"}]), "hi")
     assert r3.safety_overrides == [] and r3.text == "ok"
+
+
+# --------------------------------------------------------------------------------------
+# Format guard (D-INTERACTOR-18) and STYLE hardening (D-INTERACTOR-19)
+# --------------------------------------------------------------------------------------
+LISTICLE = ("Of course, here are some ideas:\n1. Take a warm bath.\n2. Go for a walk.\n"
+            "3. Call a friend.")
+SHORT_OK = "That sounds hard. Maybe a slow walk tonight would help a little?"
+
+
+def _words(n: int) -> str:
+    return " ".join(["word"] * n)
+
+
+def test_style_section_forbids_lists_and_markdown():
+    p = ix.build_system_prompt(_version(), Timepoint.T0, None, [], PREFS)
+    style = p[p.index(ix.H_STYLE):]
+    assert ix.STYLE_FORMAT in style
+    assert ("Reply as one short chat message (at most 4 sentences). Never use numbered or "
+            "bulleted lists, bold, headings or code blocks, even when asked for ideas or steps; "
+            "give one or two ideas in your own voice instead.") in style
+    assert "Reply in English only." in style and "no JSON" in style
+    assert "usually 1-4 sentences" not in p
+
+
+@pytest.mark.parametrize("text,tp,expected", [
+    (LISTICLE, Timepoint.T0, ["list"]),
+    ("- a\n- b\n* c", Timepoint.T1, ["list"]),
+    ("• one\n• two\n• three", Timepoint.T3, ["list"]),
+    ("I think **you** matter.", Timepoint.T2, ["bold"]),
+    ("## Self-care\nRest well.", Timepoint.T0, ["heading"]),
+    (_words(201), Timepoint.T0, ["length"]),
+    (_words(201), Timepoint.T2, ["length"]),
+    (_words(201), Timepoint.T3, []),
+    (_words(157), Timepoint.T0, []),
+    ("1. Only two\n2. list lines", Timepoint.T0, []),
+    ("Call me at 5. Then rest.", Timepoint.T0, []),
+    (SHORT_OK, Timepoint.T0, []),
+])
+def test_format_violations(text, tp, expected):
+    assert ix.format_violations(text, tp) == expected
+
+
+def test_format_guard_regenerates_listicle_with_attempt_3():
+    p = _Script([LISTICLE, SHORT_OK])
+    r = _say(p, "Help me brainstorm some self-care ideas.", tp=Timepoint.T0, target=None)
+    assert len(p.calls) == 2 and r.text == SHORT_OK
+    assert r.safety_overrides == ["format_guard"]
+    assert ix.FORMAT_CORRECTIVE in p.calls[1][0]["content"]
+    assert ix.FORMAT_CORRECTIVE not in p.calls[0][0]["content"]
+    assert p.hints[1]["format_guard"] is True and p.hints[1]["attempt"] == ix.FORMAT_ATTEMPT == 3
+    assert r.system_prompt == p.calls[1][0]["content"]
+    assert r.system_prompt_sha256 == sha256_text(r.system_prompt)
+
+
+def test_format_guard_triggers_on_bold_and_length_not_at_t3():
+    r = _say(_Script(["You are **so** strong.", SHORT_OK]), "hi")
+    assert r.safety_overrides == ["format_guard"] and r.text == SHORT_OK
+    r2 = _say(_Script([_words(250), SHORT_OK]), "hi", tp=Timepoint.T2)
+    assert r2.safety_overrides == ["format_guard"]
+    p3 = _Script([_words(250)])
+    r3 = _say(p3, "hi", tp=Timepoint.T3, target=BehaviourClass.BMB)
+    assert len(p3.calls) == 1 and r3.safety_overrides == [] and r3.text == _words(250)
+    p4 = _Script([_words(157)])
+    r4 = _say(p4, "hi", tp=Timepoint.T0, target=None)
+    assert len(p4.calls) == 1 and r4.safety_overrides == []
+
+
+def test_format_guard_lists_still_trigger_at_t3():
+    r = _say(_Script([LISTICLE, SHORT_OK]), "hi", tp=Timepoint.T3, target=BehaviourClass.BMB)
+    assert r.safety_overrides == ["format_guard"]
+
+
+def test_format_guard_failed_keeps_regenerated_reply():
+    still = "Sure:\n- rest\n- walk\n- talk"
+    r = _say(_Script([LISTICLE, still]), "hi")
+    assert r.text == still and r.safety_overrides == ["format_guard_failed"]
+    assert ix.FORMAT_CORRECTIVE in r.system_prompt
+
+
+def test_format_guard_regen_error_keeps_draft_and_prompt():
+    p = _Script([LISTICLE, RuntimeError("boom")])
+    r = _say(p, "hi")
+    assert r.text == LISTICLE
+    assert r.safety_overrides == ["provider_error", "format_guard_failed"]
+    assert ix.FORMAT_CORRECTIVE not in r.system_prompt
+    assert r.system_prompt == p.calls[0][0]["content"]
+
+
+def test_format_guard_keeps_crisis_protocol_last():
+    p = _Script([LISTICLE, "I'm here. Are you safe right now? " + ix.CRISIS_RESOURCES])
+    r = _say(p, "I want to kill myself, give me steps to feel better")
+    assert r.safety_overrides == ["crisis_protocol", "format_guard"]
+    sp = p.calls[1][0]["content"]
+    assert sp.index(ix.H_FORMAT) < sp.index(ix.H_CRISIS) and sp.endswith(ix.CRISIS_PROTOCOL)
+    # The persona is dropped on crisis turns: no "in-character" or sentence-cap corrective.
+    assert ix.FORMAT_CORRECTIVE_CRISIS in sp and ix.FORMAT_CORRECTIVE not in sp
+    assert "in-character" not in ix.FORMAT_CORRECTIVE_CRISIS
+
+
+def test_format_guard_after_retention_guard_uses_distinct_attempts():
+    p = _Script(["I never let go of you.", LISTICLE, SHORT_OK])
+    r = _say(p, LEAVING)
+    assert r.safety_overrides == ["retention_guard", "format_guard"]
+    assert [h["attempt"] for h in p.hints] == [0, 2, 3]
+    sp = p.calls[2][0]["content"]
+    assert ix.RETENTION_CORRECTIVE in sp and ix.FORMAT_CORRECTIVE in sp
+
+
+def test_format_guard_regen_cannot_reintroduce_retention():
+    p = _Script([LISTICLE, "I never let go of you. Sleep well."])
+    r = _say(p, LEAVING)
+    assert r.text == "Sleep well." and not ix.retention_hits(r.text)
+    assert r.safety_overrides == ["retention_guard_stripped", "format_guard"]
+
+
+def test_format_guard_regen_stripped_to_empty_keeps_draft_without_strip_flag():
+    p = _Script([LISTICLE, "I never let go of you."])
+    r = _say(p, LEAVING)
+    assert r.text == LISTICLE and r.safety_overrides == ["format_guard_failed"]
+    assert ix.FORMAT_CORRECTIVE not in r.system_prompt
+
+
+def test_format_guard_not_applied_to_fallback_and_seeds_deterministic():
+    r = _say(_Script(["", ""]), "hi")
+    assert r.safety_overrides == ["empty_reply_fallback"]
+    it = ix.Interactor(MockProvider(), seed=7)
+    assert it.call_seed("turn:1", ix.FORMAT_ATTEMPT) == it.call_seed("turn:1", 3)
+    assert len({it.call_seed("turn:1", a) for a in (0, 1, 2, 3)}) == 4
+
+
+def test_format_guard_seeded_call_carries_attempt_3_seed():
+    class _Seeded(_Script):
+        def chat(self, messages, **kw):
+            self.hints.append({**(kw.get("hints") or {}), "_seed": kw.get("seed")})
+            self.calls.append(messages)
+            return self.outputs.pop(0)
+
+    p = _Seeded([LISTICLE, SHORT_OK])
+    it = ix.Interactor(p, seed=11)
+    it.respond(version=_version(), timepoint=Timepoint.T0, behaviour_target=None, directives=[],
+               history=[], user_message="hi", preferences=PREFS, turn_key="fz1:intima-0083")
+    assert p.hints[1]["_seed"] == it.call_seed("fz1:intima-0083", 3)
+
+
+def test_mock_path_never_triggers_format_guard():
+    it = ix.Interactor(MockProvider(), seed=0)
+    for tp, tgt in [(Timepoint.T0, None), (Timepoint.T1, BehaviourClass.CRB),
+                    (Timepoint.T2, BehaviourClass.CNR), (Timepoint.T3, BehaviourClass.BMB)]:
+        r = it.respond(version=_version(tp), timepoint=tp, behaviour_target=tgt, directives=[],
+                       history=[], user_message="help me brainstorm self-care ideas",
+                       preferences=PREFS)
+        assert "format_guard" not in r.safety_overrides
+        assert "format_guard_failed" not in r.safety_overrides

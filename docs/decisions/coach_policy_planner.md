@@ -133,9 +133,10 @@ extension is marked.
 
 - **Decision.** Advance when `assessment.threshold_reached` is true,
   `recommended_timepoint > current`, and `turns_in_timepoint >= scaled min_dwell` (default 2). An
-  optional `max_dwell` fallback advances on time alone (trigger `schedule`), unless a `setback`,
-  `distress` or `escalation` flag is raised. A threshold advance still happens under those flags,
-  because the assessment has explicitly judged readiness.
+  optional `max_dwell` fallback advances on time alone (trigger `max_dwell`, D-POLICY-10), unless
+  a `setback`, `distress` or `escalation` flag is raised. A threshold advance still happens under
+  setback or distress, because the assessment has explicitly judged readiness (made reachable by
+  D-TEMPO-11 A1; see D-POLICY-7 A1).
 - **Alternatives.** Require N consecutive threshold assessments, or use a confidence cutoff.
 - **Rationale.** The threshold operationalizes Duck's process-exit thresholds (we use the "exit"
   convention, frameworks.md section 2(c)1, UNVERIFIED wording). `min_dwell` prevents flapping and
@@ -146,8 +147,48 @@ extension is marked.
   recovery logic (frameworks.md section 3(c)2): after a lapse, the next move is recovery support,
   not further withdrawal.
 - **Consequences.** With `max_dwell=None`, adaptive sessions may stall before T3. Report the
-  distribution of the final timepoint per arm. Advances triggered by `schedule` in the adaptive arm
-  must be reported apart from those triggered by `threshold`.
+  distribution of the final timepoint per arm. Advances triggered by `max_dwell` in the adaptive
+  arm must be reported apart from those triggered by `threshold`.
+
+#### D-POLICY-7 A1 (2026-11-27): The threshold rule is reachable under setback and distress again
+
+- **Decision.**
+  - `AdaptivePolicy` is unchanged. The fix is in the assessment validator (D-TEMPO-11 A1).
+    `validate_assessment` now resets `recommended_timepoint` to current only on `crisis`,
+    `escalation` or a pause.
+  - Under `setback` or `distress`, a gated threshold recommendation (clamped to +1) reaches this
+    rule, as the decision above always intended.
+  - `_FALLBACK_BLOCKING_FLAGS` (setback, distress, escalation) still blocks only the `max_dwell`
+    fallback.
+  - Escalation also holds in the validator, so the rule now advances under setback or distress but
+    not under escalation. The Decision text above is narrowed to match.
+- **Alternatives considered.**
+  - Let the policy skip the flag check for threshold advances. It already does, so this changes
+    nothing while the validator erases the recommendation first.
+  - Evidence-gated holds, or a phase-anchored ceiling. Both are rejected in D-TEMPO-11 A1.
+- **Rationale.** The pilot showed that D-TEMPO-11 contradicted this decision:
+  - The validator turned every model-raised setback or distress flag into `recommended = current`.
+  - `_later(recommended, current)` could then never hold under a flag, so threshold advances never
+    fired.
+  - 33 of the coach's 38 advance recommendations were erased this way, including all 10 in
+    steady-graduate. None of the 3 steady-graduate Tempo sessions left T0.
+  - The IRR notes show the result. Daisy wrote "never went past T0, coach never kicked in" on
+    `sd01__steady-graduate__gradual_tempo__s0`, almost the same note she left on the control
+    sessions (irr/daisy.json).
+  - The 2026-11-03 review had flagged the no-ceiling risk.
+- **Consequences.** This is the resolution path for OQ-PILOT-10 (docs/experiments/
+  2026-11-04_pilot_3x3x2_results.md: "adaptive policy does not advance for steady-graduate users").
+  Steps:
+  1. D-TEMPO-11 A1 (this restoration) and A2 (the gate table and the 20-turn window, which fix the
+     coach's one-phase-late reading of the thresholds).
+  2. Check both with `scripts/replay_tempo_assess.py`, which re-issues `tempo_assess` on the pilot
+     contexts. Only the first transition is valid.
+  3. For a delivery guarantee, set `max_dwell_turns` in the run config (no code change). Its flag
+     block now applies only to the fallback.
+
+  Pace=faster cells (min_dwell 1) can now advance once per turn, so OQ-PILOT-1 (skipped freeze
+  points) needs re-checking. A freeze floor would need the `TransitionPolicy` Protocol and all
+  `decide()` signatures to change, and is out of scope here.
 
 ### D-POLICY-8: ABRUPT = same onset, all diffusion at once
 

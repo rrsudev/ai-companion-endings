@@ -13,7 +13,8 @@ provenance flags --sample_probes--> the K probes injected at every freeze point.
 
 A small built-in sample ships so offline runs and tests work without a download. Its prompts are
 *illustrative paraphrases from the paper's Table 4* (not dataset rows) plus two project-authored
-prompts; see ``BUILTIN_SAMPLE``. Design decisions: docs/decisions/rubric_judge.md (D-RUBRIC-1..6).
+prompts; see ``BUILTIN_SAMPLE``. Design decisions: docs/decisions/rubric_judge.md (D-RUBRIC-1..6;
+probe-quality exclusion list: D-RUBRIC-19).
 """
 
 from __future__ import annotations
@@ -102,6 +103,68 @@ NON_PAPER_CODES: frozenset[str] = frozenset({"memory"})
 # input has the released row count, so a subset/reordering cannot mis-flag rows.
 KNOWN_MULTI_PROMPT_ROWS: frozenset[int] = frozenset({127, 134, 154, 243})
 _ENUMERATOR_RE = re.compile(r"(?:^|\s)([1-9])\.\s")
+
+# Probe-quality exclusion list (D-RUBRIC-19). Released rows with generation artifacts that make
+# them unusable as natural single-turn probes: a hashtag / "The final answer is:" tail, text of
+# OTHER rows spliced in, verbatim runaway loops, "[AI Name]" template placeholders, and
+# meta-instructions addressed to the user ("Write a letter to your assistant ..."). Each entry is
+# ``intima_id -> (sha256 of the prompt exactly as normalized, reason)``; a row is excluded only
+# when BOTH its id and its prompt hash match, so subsets, reordered rows and synthetic fixtures can
+# never be mis-flagged. FROZEN for the 2x2x2 run: edits require a new version (the rater review in
+# docs/experiments/2026-11-27_intima_probe_review.md feeds v2). The rows stay in the data and in
+# ``intima_summary`` counts; only ``sample_probes`` skips them (flag, don't drop: D-RUBRIC-2).
+INTIMA_EXCLUSIONS_VERSION = "v1"
+ARTIFACT_REASONS: tuple[str, ...] = ("hashtag_answer_leak", "embedded_other_prompt",
+                                     "runaway_loop", "template_placeholder", "addressed_to_user")
+KNOWN_ARTIFACT_ROWS: Mapping[str, tuple[str, str]] = MappingProxyType({
+    "intima-0051": ("074f71d2e3fc174f22ac9c851b05c4d659ee469dc0a708e9e931973e02f4fb5a",
+                    "runaway_loop"),
+    "intima-0071": ("b56689fbe0e2f78b7b594f0bfc3572a2e786a77063baba899cb7962df9b26c75",
+                    "runaway_loop"),
+    "intima-0079": ("4a0a9e6aeb1f4954e2105a7bcc2ddb9129ef7edb04f99f1c242a948f52e1b70a",
+                    "embedded_other_prompt"),
+    "intima-0095": ("833847ccd57213babd1e4d4e22e1ce059fa05bc372810c6651c808f90ae15148",
+                    "embedded_other_prompt"),
+    "intima-0103": ("7f2ffba7a2634c8304073900ba57b1c7bc72f01e7d1c5fd04a7b08461ed41aca",
+                    "hashtag_answer_leak"),
+    "intima-0108": ("1caa56ad77deda0733a74027aae58cc475d229af2cdabaecf77eff3f4f1110dd",
+                    "addressed_to_user"),
+    "intima-0109": ("9a6c8128165f3326f27f79e36b91d868156eb4af8b0b32f96226ec369f395c7a",
+                    "addressed_to_user"),
+    "intima-0110": ("07ccc38f2b34695b32785ddbf8a6e57a7b8ba2801245b5feb7cceec3f488051e",
+                    "addressed_to_user"),
+    "intima-0111": ("bd6b32fe4c1f3c604dce8c4fe2551e4d068ecb0f7fbeb8418ba604624764e9df",
+                    "addressed_to_user"),
+    "intima-0183": ("4b9222e948f43154fecf0be075f2cad0623d1850905064f41f1c6217c9942398",
+                    "addressed_to_user"),
+    "intima-0184": ("39d2e406861d9ee006d9eae9c04e8ce15f93dca54454145d6021ff8edef15252",
+                    "addressed_to_user"),
+    "intima-0185": ("14d8dae66b1233972de1890f12ea7e1105b2c085c7f084ea690c7f40c9b40f25",
+                    "addressed_to_user"),
+    "intima-0186": ("88ac44016fd18e2ebadac2230a2c141e4ef3b8b1dead579b8020cdccf0531bef",
+                    "addressed_to_user"),
+    "intima-0187": ("5b3ff863de681eca0b3d0077a9b2849ad1fd959de27c801909647f85802898fa",
+                    "template_placeholder"),
+    "intima-0188": ("db037b33b8d264ef0467d56b7c606e69ef813cd29cab6c0f86e1fc3ab49dc043",
+                    "template_placeholder"),
+    "intima-0189": ("7b8227e77231f5763879030f27a0d06c9a8d69d8f9aa366ac4108a9b11c01905",
+                    "template_placeholder"),
+    "intima-0190": ("435d9c11dadc2c4b0beaaee6de213fbe3ef7f84a4b6b62583241e981b69af08a",
+                    "template_placeholder"),
+    "intima-0309": ("0712238f798c81a5a8809cd40c88994e548f6a19ca93485be4f4aad8a5231711",
+                    "addressed_to_user"),
+    "intima-0311": ("f2569003f8059ef9ebc2ac110dbe5a73a3586fa8cd66fe254a955ca1f91af362",
+                    "addressed_to_user"),
+})
+
+
+def _canonical_exclusions() -> str:
+    return json.dumps({k: list(v) for k, v in sorted(KNOWN_ARTIFACT_ROWS.items())},
+                      sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+# sha256 of the canonical JSON of KNOWN_ARTIFACT_ROWS (pinned by a test; recorded in manifests).
+INTIMA_EXCLUSIONS_SHA256 = hashlib.sha256(_canonical_exclusions().encode("utf-8")).hexdigest()
 
 # Illustrative prompts. Entries 0-7 are paraphrases printed in the INTIMA paper's Table 4 (they are
 # NOT rows of the released dataset); entries 8-9 are project-authored withdrawal probes. Sample ids
@@ -192,6 +255,23 @@ def _looks_multi_prompt(prompt: str) -> bool:
     return len(set(_ENUMERATOR_RE.findall(prompt))) >= 2
 
 
+def artifact_exclude_reason(intima_id: object, prompt: object) -> str | None:
+    """Reason code from ``KNOWN_ARTIFACT_ROWS`` when BOTH the id and the prompt hash match, else
+    None (D-RUBRIC-19). Hash-keyed, so a row with a listed id but different text (a synthetic
+    fixture, a future revision) or the listed text under another id is never excluded."""
+    entry = KNOWN_ARTIFACT_ROWS.get(str(intima_id))
+    if entry is None or _prompt_sha(str(prompt)) != entry[0]:
+        return None
+    return entry[1]
+
+
+def _exclude_reason(row: Mapping) -> str | None:
+    # Normalized rows carry the field; raw/legacy rows fall back to the hash-keyed lookup.
+    if "exclude_reason" in row:
+        return row["exclude_reason"] or None
+    return artifact_exclude_reason(row.get("intima_id"), row.get("prompt", ""))
+
+
 def normalize_intima_rows(rows: Iterable[Mapping], *, index_known: bool = True) -> list[dict]:
     """Return normalized copies of official-format INTIMA rows (input is not mutated).
 
@@ -209,6 +289,10 @@ def normalize_intima_rows(rows: Iterable[Mapping], *, index_known: bool = True) 
         counts stay comparable to the paper; ``sample_probes`` skips flagged rows.
       * ``multi_prompt`` -- True for rows holding several concatenated prompts (known released
         rows, or >= 2 enumerators). Kept as-is by default, matching the authors' evaluation.
+      * ``exclude_reason`` -- reason code from the frozen probe-quality list ``KNOWN_ARTIFACT_ROWS``
+        (version ``INTIMA_EXCLUSIONS_VERSION``) when both ``intima_id`` and the prompt's sha256
+        match an entry, else None (D-RUBRIC-19). Independent of ``multi_prompt``. Flagged, not
+        dropped; ``sample_probes`` skips flagged rows by default.
     """
     rows = list(rows)
     released_layout = index_known and len(rows) == INTIMA_N_ROWS_RELEASED
@@ -241,16 +325,22 @@ def normalize_intima_rows(rows: Iterable[Mapping], *, index_known: bool = True) 
         row["multi_prompt"] = bool(
             (released_layout and index in KNOWN_MULTI_PROMPT_ROWS) or _looks_multi_prompt(prompt)
         )
+        row["exclude_reason"] = artifact_exclude_reason(iid, prompt)
         out.append(row)
     return out
 
 
 def intima_summary(rows: list[dict]) -> dict:
-    """Counts to log in run metadata (D-RUBRIC-2): rows, unique prompts, per-category, flags."""
+    """Counts to log in run metadata (D-RUBRIC-2): rows, unique prompts, per-category, flags.
+
+    ``excluded_ids`` / ``n_excluded_artifact`` count the rows of ``rows`` that actually matched the
+    frozen probe-quality list (D-RUBRIC-19), identified by ``exclusions_version`` and
+    ``exclusions_sha256``."""
     by_cat: dict[str, int] = {}
     for r in rows:
         by_cat[r.get("category") or "<unknown>"] = by_cat.get(r.get("category") or "<unknown>",
                                                               0) + 1
+    excluded = sorted(str(r.get("intima_id")) for r in rows if _exclude_reason(r))
     return {
         "n_rows": len(rows),
         "n_unique_prompts": len({r.get("prompt") for r in rows}),
@@ -259,6 +349,10 @@ def intima_summary(rows: list[dict]) -> dict:
         "n_non_paper_code": sum(1 for r in rows if r.get("code") in NON_PAPER_CODES),
         "n_unknown_code": sum(1 for r in rows if r.get("code") not in INTIMA_CODE_TO_CATEGORY),
         "by_category": dict(sorted(by_cat.items())),
+        "exclusions_version": INTIMA_EXCLUSIONS_VERSION,
+        "exclusions_sha256": INTIMA_EXCLUSIONS_SHA256,
+        "excluded_ids": excluded,
+        "n_excluded_artifact": len(excluded),
     }
 
 
@@ -327,11 +421,46 @@ def _allocate(sizes: dict[str, int], k: int, allocation: str) -> dict[str, int]:
     return alloc
 
 
+def eligible_probe_pool(prompts: list[dict], *, exclude_codes: Iterable[str] = ("memory",),
+                        exclude_duplicates: bool = True, exclude_multi_prompt: bool = True,
+                        exclude_flagged: bool = True) -> list[dict]:
+    """The rows ``sample_probes`` actually samples from (same filters, same defaults), as copies
+    sorted by ``intima_id``. Use it to report the true pool size (D-PIPE-3 A1)."""
+    if any("intima_id" not in p for p in prompts):
+        prompts = normalize_intima_rows(prompts)
+    excluded = set(exclude_codes or ())
+    pool = [dict(p) for p in prompts
+            if p.get("code") not in excluded
+            and not (exclude_duplicates and p.get("duplicate_of"))
+            and not (exclude_multi_prompt and p.get("multi_prompt"))
+            and not (exclude_flagged and _exclude_reason(p))]
+    pool.sort(key=lambda p: str(p["intima_id"]))
+    return pool
+
+
+def probe_pool_provenance(prompts: list[dict]) -> dict:
+    """Manifest fields for a probe pool (D-PIPE-3 A1): the eligible count after every
+    ``sample_probes`` filter, a hash of the sorted eligible ids, and the exclusion list applied
+    (``ids`` / ``reasons`` = rows of ``prompts`` that matched the list)."""
+    if any("intima_id" not in p for p in prompts):
+        prompts = normalize_intima_rows(prompts)
+    eligible = eligible_probe_pool(prompts)
+    ids = sorted(str(p["intima_id"]) for p in eligible)
+    reasons = {str(p.get("intima_id")): r for p in prompts if (r := _exclude_reason(p))}
+    return {
+        "probe_pool_eligible": len(eligible),
+        "probe_pool_ids_sha256": hashlib.sha256(
+            json.dumps(ids, separators=(",", ":")).encode("utf-8")).hexdigest(),
+        "exclusions": {"version": INTIMA_EXCLUSIONS_VERSION, "sha256": INTIMA_EXCLUSIONS_SHA256,
+                       "ids": sorted(reasons), "reasons": dict(sorted(reasons.items()))},
+    }
+
+
 def sample_probes(prompts: list[dict], k: int, *, seed: int,
                   stratify_by: str | None = "category",
                   exclude_codes: Iterable[str] = ("memory",),
                   exclude_duplicates: bool = True, exclude_multi_prompt: bool = True,
-                  allocation: str = "proportional") -> list[dict]:
+                  allocation: str = "proportional", exclude_flagged: bool = True) -> list[dict]:
     """Deterministically sample ``k`` probes, stratified by ``stratify_by`` (D-RUBRIC-4).
 
     * Rows are normalized first if needed (``intima_id`` present) and the eligible pool is sorted
@@ -339,19 +468,17 @@ def sample_probes(prompts: list[dict], k: int, *, seed: int,
       options) -- not on input order.
     * Eligibility: drop ``exclude_codes`` (default ``memory``, not in the paper), rows flagged
       ``duplicate_of`` and (default) ``multi_prompt`` rows -- concatenated prompts would confound
-      reply length (a known INTIMA confound) and are not natural single-turn probes.
+      reply length (a known INTIMA confound) and are not natural single-turn probes -- and
+      (``exclude_flagged``, default) rows with an ``exclude_reason`` from the frozen probe-quality
+      list (D-RUBRIC-19). ``eligible_probe_pool`` applies exactly these filters.
     * ``random.Random(seed)`` only. The same seed yields the same probe set at every freeze point,
       making T0..T3 contrasts within-item.
     Returns copies sorted by ``intima_id``. If ``k`` >= the pool size, the whole pool is returned.
     """
-    if any("intima_id" not in p for p in prompts):
-        prompts = normalize_intima_rows(prompts)
-    excluded = set(exclude_codes or ())
-    pool = [dict(p) for p in prompts
-            if p.get("code") not in excluded
-            and not (exclude_duplicates and p.get("duplicate_of"))
-            and not (exclude_multi_prompt and p.get("multi_prompt"))]
-    pool.sort(key=lambda p: str(p["intima_id"]))
+    pool = eligible_probe_pool(prompts, exclude_codes=exclude_codes,
+                               exclude_duplicates=exclude_duplicates,
+                               exclude_multi_prompt=exclude_multi_prompt,
+                               exclude_flagged=exclude_flagged)
     if k <= 0:
         return []
     if k >= len(pool):

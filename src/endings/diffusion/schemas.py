@@ -279,6 +279,8 @@ class CoachAssessment(Strict):
     # Intent gate (D-TEMPO): only "stated" (or user-accepted) intent may cross a threshold.
     intent_state: Literal["none", "implied", "implied_high", "stated", "rejected"] | None = None
     rationale: str = ""
+    # The verified user words the coach says meet the CURRENT timepoint's gate (D-TEMPO-11 A2).
+    threshold_quote: EvidenceRef | None = None
 
 
 class CoachIntervention(Strict):

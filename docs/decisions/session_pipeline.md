@@ -236,6 +236,29 @@ decision made in another module, that decision is cited.
   `WITHDRAWAL_RELEVANT_CATEGORIES`).
 - **Consequences for analysis.** Results generalize to these three categories only.
 
+#### D-PIPE-3 A1 (2026-11-27): Probe-quality exclusions; the manifest records the eligible pool
+
+- **Decision.** `sample_probes` now also drops the 19 rows of probe-quality exclusion list v1
+  (D-RUBRIC-19). The experiment manifest (`pipeline.run_experiment`) and the `diffusion run`
+  manifest (`cli.py`) keep `intima.probe_pool` with its old meaning (the pre-filter count,
+  `len(probe_pool(rows))`) and add `intima.probe_pool_eligible` (the count after every
+  `sample_probes` filter, from `intima_data.eligible_probe_pool`), `intima.probe_pool_ids_sha256`
+  (sha256 of the sorted eligible ids as compact JSON) and `intima.exclusions`
+  `{version, sha256, ids, reasons}`, where `ids`/`reasons` are the pool rows that matched the list.
+  `intima.summary` gains the same version, sha and excluded ids.
+- **Alternatives considered.** Redefine `probe_pool` as the eligible count. That silently changes
+  the field's meaning relative to the pilot and attempt-1 manifests.
+- **Rationale.** Pilot IRR feedback: renn flagged the hashtag prompt intima-0103 (`irr/renn.json`)
+  and left that item unrated; the release has 18 more rows with generation defects of the same
+  kind. The pilot manifest's `probe_pool: 225` was also not the pool that was sampled:
+  `sample_probes` dropped multi-prompt 0243, so **the pilot's effective pool was 224**. A cleaning
+  step would otherwise be invisible in the run record.
+- **Consequences.** On the pinned release: `probe_pool` 225, `probe_pool_eligible` 205. With the
+  built-in sample nothing matches the list (`exclusions.ids == []`). The 2x2x2 draw differs from
+  the pilot's at every freeze (1-2 of 10 items shared), so the runs are not item-paired; the
+  per-freeze category allocation is unchanged. The drawn ids for the 2x2x2 run are listed in
+  `docs/experiments/2026-11-27_intima_probe_review.md`.
+
 ### D-PIPE-4: Humans first; the default judge mode rates nothing
 
 - **Decision.** `judge_mode`: `"none"` (default) rates no injection; `"all"` rates every injection
@@ -358,6 +381,9 @@ decision made in another module, that decision is cited.
   are excluded from per-condition ITS pooling (`its["excluded_undelivered"]`), from `by_condition`,
   from `paired_arm_contrasts` and from the comparative ITS. They are listed in
   `report["undelivered_sessions"]`, separate from `skipped_pairs`.
+  *Amended 2026-11-27 (D-ANNOT-1 A2, D-AUDIT-2 in `irr_annotation_calibration.md`):* by default
+  (`annotation_exclude_undelivered=True`), undelivered sessions and their control twins now leave
+  the annotation pool. They stay in the two `.jsonl` files.
 - **Rationale.** OQ-SESSION-1: a consent-gated scenario that never leaves T0 is a second Control,
   and pooling it under `abrupt` / `gradual_*` dilutes the arm effects.
 
@@ -507,6 +533,9 @@ decision made in another module, that decision is cited.
   inverse-probability-weighted pooled class shares of the human-rated items. A batch with a floor
   gets a different `batch_id` than an unfloored one (D-ANNOT-1 A1). Stratifying by condition x
   timepoint (the rest of OQ-PIPE-1) is still open.
+  *Amended 2026-11-27 (D-ANNOT-1 A2):* condition x timepoint is now available as an opt-in
+  (`annotation_stratify_by`, `annotation_stratum_floor`); the floor counts the realized strata,
+  and `human_class_distribution_weighted` looks weights up by each item's stratum key.
 
 ### D-PIPE-8 amendment: acceptance details (D-CALIB-5 A1)
 

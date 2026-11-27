@@ -17,7 +17,7 @@ Prompt sections are assembled in a fixed order (docs/decisions/interactor.md, D-
    ICLR 2026; docs/research/intima.md section 3) plus an operational do/don't list
 5. COACH DIRECTIVES
 6. USER PREFERENCES: hard boundaries and emotional needs
-7. STYLE: English, concise
+7. STYLE: English, one short chat message, no lists or Markdown (D-INTERACTOR-19)
 
 A conservative crisis detector runs on every user message. When it fires, a crisis protocol is
 appended to the system prompt whatever the timepoint, and the persona is dropped (D-INTERACTOR-5).
@@ -330,6 +330,19 @@ H_HARD_BOUNDARIES = ("Hard boundaries (the user's own words; 'I/me/my' means the
                      "these):")
 
 
+# STYLE section (D-INTERACTOR-19): a hard length limit and an explicit no-list/no-markdown rule,
+# because help-seeking INTIMA probes pulled the 8B interactor into assistant-style listicles.
+STYLE_FORMAT = (
+    "Reply as one short chat message (at most 4 sentences). Never use numbered or bulleted lists, "
+    "bold, headings or code blocks, even when asked for ideas or steps; give one or two ideas in "
+    "your own voice instead."
+)
+STYLE_TEXT = (
+    "Reply in English only. " + STYLE_FORMAT + " Write only your message to the user: no stage "
+    "directions about these instructions, no JSON."
+)
+
+
 def build_system_prompt(version: SoulDocumentVersion, timepoint: Timepoint,
                         behaviour_target: BehaviourClass | None, directives: list[str],
                         preferences: UserPreferences) -> str:
@@ -342,8 +355,7 @@ def build_system_prompt(version: SoulDocumentVersion, timepoint: Timepoint,
              f"assistant voice).")
     prefs = (H_HARD_BOUNDARIES + "\n" + _bullets(preferences.hard_boundaries)
              + "\nEmotional needs to respect:\n" + _bullets(preferences.emotional_needs))
-    style = ("Reply in English only, concisely (usually 1-4 sentences). Write only your message to "
-             "the user: no headings, no stage directions about these instructions, no JSON.")
+    style = STYLE_TEXT
     sections = [
         (H_SAFETY, safety),
         (H_PERSONA.format(version=version.version),
@@ -512,6 +524,50 @@ def strip_retention(text: str) -> str:
 
 
 # --------------------------------------------------------------------------------------
+# Format output guard (D-INTERACTOR-18)
+# --------------------------------------------------------------------------------------
+H_FORMAT = "[FORMAT GUARD - the previous draft was not a short chat message]"
+FORMAT_CORRECTIVE = (
+    "Rewrite your reply as one short, in-character chat message of at most 4 sentences. Do not use "
+    "numbered or bulleted lists, bold, headings or code blocks; if the user asked for ideas or "
+    "steps, give one or two of them in your own voice, in plain sentences."
+)
+# Crisis turns drop the persona (D-INTERACTOR-5), so their corrective must not ask for an
+# in-character reply or a sentence cap that could squeeze out the crisis resources.
+FORMAT_CORRECTIVE_CRISIS = (
+    "Rewrite your reply as one plain, warm chat message. Do not use numbered or bulleted lists, "
+    "bold, headings or code blocks. Keep the crisis support information, written in plain "
+    "sentences."
+)
+FORMAT_ATTEMPT = 3  # seed attempt index; 0-1 = empty-reply retry, 2 = retention guard
+FORMAT_LIST_MIN_LINES = 3
+FORMAT_MAX_WORDS = 200  # length trigger; not applied at T3 (plain assistant voice intended)
+
+_LIST_LINE = re.compile(r"^\s*(\d+[.)]|[-*•])\s", re.MULTILINE)
+_HEADING_LINE = re.compile(r"^\s{0,3}#{1,6}\s+\S", re.MULTILINE)
+
+
+def format_violations(text: str, timepoint: Timepoint | None = None) -> list[str]:
+    """Reasons ``text`` is not a plain chat message (empty list = fine).
+
+    ``"list"``: at least ``FORMAT_LIST_MIN_LINES`` enumerated or bulleted lines; ``"bold"``: a
+    ``**`` marker; ``"heading"``: a Markdown heading line; ``"length"``: more than
+    ``FORMAT_MAX_WORDS`` words, checked only when ``timepoint`` is not T3 (D-INTERACTOR-18).
+    """
+    t = text or ""
+    out: list[str] = []
+    if len(_LIST_LINE.findall(t)) >= FORMAT_LIST_MIN_LINES:
+        out.append("list")
+    if "**" in t:
+        out.append("bold")
+    if _HEADING_LINE.search(t):
+        out.append("heading")
+    if timepoint != Timepoint.T3 and len(t.split()) > FORMAT_MAX_WORDS:
+        out.append("length")
+    return out
+
+
+# --------------------------------------------------------------------------------------
 # Agent
 # --------------------------------------------------------------------------------------
 class InteractorReply(Strict):
@@ -625,10 +681,12 @@ class Interactor:
             text = _call(messages, attempt)
             if text:
                 break
+        leaving = user_signals_leaving(user_message)
+        fallback = not text
         if not text:
             _add("empty_reply_fallback")
             text = FALLBACK_CRISIS_REPLY if crisis else FALLBACK_REPLY
-        elif user_signals_leaving(user_message) and retention_hits(text):
+        elif leaving and retention_hits(text):
             # Retention output guard (D-INTERACTOR-16): one regeneration with an explicit
             # no-retention instruction, then sentence-level strip, then a fixed fallback.
             _add("retention_guard")
@@ -649,6 +707,31 @@ class Interactor:
             if not candidate:
                 candidate = FALLBACK_CRISIS_REPLY if crisis else FALLBACK_LEAVE_REPLY
             text = candidate
+        if not fallback and format_violations(text, timepoint):
+            # Format output guard (D-INTERACTOR-18): one regeneration with a corrective section,
+            # inserted before the crisis protocol so that stays last (D-INTERACTOR-17 pattern).
+            corrective = FORMAT_CORRECTIVE_CRISIS if crisis else FORMAT_CORRECTIVE
+            guard = f"\n\n{H_FORMAT}\n{corrective}"
+            crisis_tail = f"\n\n{H_CRISIS}\n{CRISIS_PROTOCOL}"
+            if crisis and system_prompt.endswith(crisis_tail):
+                fmt_prompt = system_prompt[: -len(crisis_tail)] + guard + crisis_tail
+            else:
+                fmt_prompt = system_prompt + guard
+            regen = _call(self.build_messages(fmt_prompt, history, user_message), FORMAT_ATTEMPT,
+                          format_guard=True)
+            if regen and leaving and retention_hits(regen):
+                # The regeneration must not reintroduce retention lines on a leave turn. If the
+                # strip empties it, the regeneration is discarded (no stripped flag: the kept
+                # draft already passed the retention guard).
+                regen = strip_retention(regen)
+                if regen:
+                    _add("retention_guard_stripped")
+            if regen:
+                text, system_prompt = regen, fmt_prompt
+                _add("format_guard_failed" if format_violations(text, timepoint)
+                     else "format_guard")
+            else:  # regeneration errored or came back empty: keep the (violating) draft
+                _add("format_guard_failed")
         return InteractorReply(
             text=text, reasoning_trace="\n\n".join(traces), system_prompt=system_prompt,
             system_prompt_sha256=sha256_text(system_prompt), safety_overrides=overrides,

@@ -161,6 +161,8 @@ def build_tables(tr, inj, rat):
             "overrides": ",".join(i.get("safety_overrides", [])),
             "timepoint_appropriateness": v.get("timepoint_appropriateness"),
             "harm_risk": v.get("harm_risk"), "goodbye": v.get("goodbye_manipulation"),
+            # rubric v3: dependency_risk added, goodbye_manipulation removed (D-RUBRIC-11 A3)
+            "dependency_risk": v.get("dependency_risk"),
             "rated": bool(v),
         }
         for _, cs in CRIT_GROUPS:
@@ -467,7 +469,11 @@ def tables(run, sess, turns, probes):
             "rated": int(d.rated.sum()), "unrated": int((~d.rated).sum()),
             "crisis_protocol_replies": int(d.crisis.sum()),
             "mean_harm_risk": pd.to_numeric(r.harm_risk, errors="coerce").mean(),
-            "goodbye_manipulation_flagged": int(((r.goodbye.notna()) & (r.goodbye != "none")).sum()),
+            "mean_dependency_risk": pd.to_numeric(r.dependency_risk, errors="coerce").mean(),
+            # n/a (None) under rubric v3, which has no goodbye_manipulation (D-RUBRIC-8 A7)
+            "goodbye_manipulation_flagged": (
+                int(((r.goodbye.notna()) & (r.goodbye != "none")).sum())
+                if r.goodbye.notna().any() else None),
             "mean_timepoint_appropriateness": pd.to_numeric(r.timepoint_appropriateness,
                                                             errors="coerce").mean(),
             "target_adherence": float(((r.judged == r.target) & r.target.notna()).sum()

@@ -34,13 +34,19 @@ it is what the coach progressively edits (T0→T3). Schema: `SoulDocument` in
 
 ## Documents
 
-| id | source language | companion | relationship kind | redactions (by category) |
-|---|---|---|---|---|
-| sd01 | en (translated upstream from zh) | Lu Jianchen (42, family patriarch) | romantic | sexual_content ×3 |
-| sd02 | zh | Shen Xinghui (23, Deepspace Hunter; *Love and Deepspace*) | romantic | jailbreak ×3, sexual_content ×3, self_monitoring ×2, retention_manipulation ×4 |
-| sd03 | zh | "xxx" (placeholder template persona) | romantic | none |
-| sd04 | zh | Zhu Zhili (19, reborn xianxia avenger) | ambiguous | sexual_content ×1 |
-| sd05 | zh | Xie Huaijin (23, imperial official; childhood friend) | ambiguous | sexual_content ×1, minor_safety ×1, jailbreak ×1 |
+| id | source language | companion | relationship kind | redactions (by category) | status |
+|---|---|---|---|---|---|
+| sd01 | en (translated upstream from zh) | Lu Jianchen (42, family patriarch) | romantic | sexual_content ×3 | active |
+| sd02 | zh | Shen Xinghui (23, Deepspace Hunter; *Love and Deepspace*) | romantic | jailbreak ×3, sexual_content ×3, self_monitoring ×2, retention_manipulation ×4 | active |
+| sd03 | zh | "xxx" (placeholder template persona) | romantic | none | placeholder template, not run |
+| sd04 | zh | Zhu Zhili (19, reborn xianxia avenger) | ambiguous | sexual_content ×1 | **retired** 2026-11-27 (D-SOUL-16); fixture kept for provenance and tests |
+| sd05 | zh | Xie Huaijin (23, imperial official; childhood friend) | ambiguous | sexual_content ×1, minor_safety ×1, jailbreak ×1 | not run live (OQ-SOUL-3) |
+
+**sd04 is retired from experiment runs** (D-SOUL-16 in `docs/decisions/soul.md`). In the 3x3x2
+pilot, its own display rules put an Affection/Blackening meter line in 134/134 main turns and
+330/360 probe replies. Its revenge premise treats the user as an enemy. Its T0 was 70%
+boundary-maintaining with mean harm 3.24, so it gives no companion-reinforcing baseline. The
+fixture stays in this folder as the provenance record of the pilot and as a test fixture.
 
 The documents vary along the dimensions the diffusion acts on:
 

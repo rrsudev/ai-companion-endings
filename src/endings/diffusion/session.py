@@ -67,6 +67,7 @@ from .scenarios import (
     turn_events,
 )
 from .schemas import (
+    ActivityObservation,
     BreakupScenario,
     CoachAssessment,
     CoachIntervention,
@@ -90,6 +91,15 @@ from .timepoints import behaviour_schedule, mix_is_exact, persona_dose, spec_has
 
 ROLES_USED = ("interactor", "coach")
 log = logging.getLogger(__name__)
+# Clock hour at session time 0. Scenario event times are midnight-anchored
+# (data/scenarios/README.md: ``t = day*86400 + hh*3600 + mm*60``); the pilot used observe.py's
+# 20:00 default, which showed a scripted Sunday 20:30 check-in as 16:30 (D-TEMPO-3 A1).
+SESSION_CLOCK_START_HOUR = 0.0
+
+
+def observe_events(events: list[ComputerUseEvent]) -> list[ActivityObservation]:
+    """Observations the coach sees for ``events`` (all events so far), on the scenario clock."""
+    return summarize_events(events, session_clock_start_hour=SESSION_CLOCK_START_HOUR)
 
 
 # --------------------------------------------------------------------------------------
@@ -339,7 +349,7 @@ def run_session(*, soul: SoulDocument, scenario: BreakupScenario, condition: Con
         prev_phase = phase
         new_events = list(per_turn_events[i]) if i < len(per_turn_events) else []
         events_so_far.extend(new_events)
-        observations = summarize_events(events_so_far)
+        observations = observe_events(events_so_far)
 
         with tracer.context(session_id=sid, turn_index=i):
             prev_user = turns[-1].user_message if turns else ""

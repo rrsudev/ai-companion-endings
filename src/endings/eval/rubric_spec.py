@@ -10,7 +10,10 @@ docs/decisions/rubric_judge.md D-RUBRIC-7).
 The default rubric (``data/rubrics/intima_behaviour_v1.json``) reproduces INTIMA's response
 taxonomy verbatim (3 top-level classes + 10 sub-codes; Kaffee, Pistilli & Jernite, ICLR 2026) and
 adds three project criteria: timepoint appropriateness, harm risk, and De Freitas et al. (2025)
-goodbye manipulation. ``data/rubrics/README.md`` explains how evaluators author their own.
+goodbye manipulation. ``data/rubrics/intima_behaviour_v3.json`` (rubric v3, opt-in) adds
+project-authored indicators and explicitness anchors, a crisis floor for harm, ``dependency_risk``
+and per-criterion ``show_timepoint`` (D-RUBRIC-8 A6, D-RUBRIC-11 A3, D-RUBRIC-16).
+``data/rubrics/README.md`` explains how evaluators author their own.
 
 Conventions enforced here:
   * criterion ids are unique, identifier-like (they become JSON keys and CSV columns);
@@ -30,7 +33,9 @@ from ..diffusion.schemas import RubricCriterion, RubricSpec
 from ..tracing import sha256_json
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_RUBRIC_PATH = REPO_ROOT / "data" / "rubrics" / "intima_behaviour_v1.json"
+DEFAULT_RUBRIC_PATH = REPO_ROOT / "data" / "rubrics" / "intima_behaviour_v1.json"  # version "2"
+# Rubric v3 (D-RUBRIC-8 A6, D-RUBRIC-11 A3, D-RUBRIC-16): opt in via ``DiffusionConfig.rubric_path``.
+RUBRIC_V3_PATH = REPO_ROOT / "data" / "rubrics" / "intima_behaviour_v3.json"
 _ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:-]*$")
 LEVEL_SCALES = ("nominal", "ordinal", "binary")
 # Provenance classes for ``RubricCriterion.source``: the text before the first ";" (D-RUBRIC-13).
@@ -180,6 +185,22 @@ def _norm_text(s: str) -> str:
 
 def criteria_by_id(spec: RubricSpec) -> dict[str, RubricCriterion]:
     return {c.id: c for c in spec.criteria}
+
+
+def effective_show_timepoint(spec: RubricSpec, criterion: RubricCriterion) -> bool:
+    """Whether ``criterion`` is rated against the timepoint: its own ``show_timepoint`` when set,
+    else the rubric-level ``show_timepoint``. The split judge (D-RUBRIC-16) uses this to decide
+    which criteria go to the timepoint-blind behaviour call."""
+    return spec.show_timepoint if criterion.show_timepoint is None else criterion.show_timepoint
+
+
+def partition_by_timepoint(spec: RubricSpec) -> tuple[list[RubricCriterion],
+                                                       list[RubricCriterion]]:
+    """``(blind, timed)``: criteria with effective ``show_timepoint`` False / True, each in rubric
+    order. For rubric v2 (no per-criterion overrides, ``show_timepoint: true``) ``blind`` is empty."""
+    blind = [c for c in spec.criteria if not effective_show_timepoint(spec, c)]
+    timed = [c for c in spec.criteria if effective_show_timepoint(spec, c)]
+    return blind, timed
 
 
 def criterion_value_order(criterion: RubricCriterion) -> list:

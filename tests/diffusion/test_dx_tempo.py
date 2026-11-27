@@ -144,6 +144,48 @@ def test_usage_trend_slope_and_direction():
     assert tr["companion_minutes_slope"] == pytest.approx(-2.0)
     assert tr["direction"] == "decreasing"
     assert usage_trend([])["direction"] == "insufficient_data"
+    assert tr["unit"] == "window"
+
+
+def test_usage_trend_is_daily_across_days():
+    """D-TEMPO-5 A1: a multi-day log is trended over daily totals, not ~6000 empty windows."""
+    day = 86400.0
+    # ready-pragmatic-like: 65 and 70 min evenings, then 50, 30, 20 min on later days.
+    plan = [(0, 65), (1, 70), (3, 50), (6, 30), (13, 20)]
+    evs = [ev(k, d * day + 20.5 * 3600, "CompanionApp", "open", dur=m * 60.0)
+           for k, (d, m) in enumerate(plan)]
+    obs = summarize_events(evs, session_clock_start_hour=0.0)
+    tr = usage_trend(obs)
+    assert tr["unit"] == "day" and tr["n_windows"] == 14
+    assert tr["direction"] == "decreasing" and tr["companion_minutes_slope"] < 0
+    assert tr["companion_minutes_total"] == pytest.approx(235.0)
+    # The old densified 5-minute series over the same log is mostly empty windows.
+    assert observe._dense(obs, "companion_minutes").count(0.0) > 3000
+    block = tempo.trend_block(tr)
+    assert block.startswith("USAGE TREND (per day): n_days=14, direction=decreasing")
+    assert "n_windows=" in tempo.trend_block(usage_trend(obs[:1]))  # one day: per window
+
+
+def test_observation_summary_shows_day_and_clock():
+    day = 86400.0
+    e = ev(1, 13 * day + 20.5 * 3600, "CompanionApp", "open", content="Sunday check-in",
+           dur=1200.0)
+    o = summarize_events([e], session_clock_start_hour=0.0)[0]
+    assert o.summary.startswith("day 13 20:30-20:35.")
+    assert o.signals["local_hour_start"] == pytest.approx(20.5)
+    assert observe.local_day(13 * day + 20.5 * 3600, 0.0) == 13
+    # With the old 20:00 anchor the same event was shown at 16:30 (pilot obs-3990).
+    assert summarize_events([e])[0].summary.startswith("day 14 16:30")
+    block = tempo.observations_block([o])
+    assert "day 13 20:30" in block
+
+
+def test_session_observes_on_the_midnight_scenario_clock():
+    from endings.diffusion import session
+
+    assert session.SESSION_CLOCK_START_HOUR == 0.0
+    e = ev(1, 20.5 * 3600, "CompanionApp", "open", dur=60.0)
+    assert session.observe_events([e]) == summarize_events([e], session_clock_start_hour=0.0)
 
 
 # --------------------------------------------------------------------------------------
@@ -359,12 +401,114 @@ def test_validate_regression_and_risk_hold():
     a = validate_assessment(_raw(rec="T0", threshold=False), current=Timepoint.T2,
                             preferences=UserPreferences(), gate=STATED, index=_index(TURNS))
     assert a.recommended_timepoint == Timepoint.T2
+    # A setback never regresses the persona.
     b = validate_assessment(_raw(rec="T1", flags=["setback", "none"]), current=Timepoint.T2,
                             preferences=UserPreferences(), gate=STATED, index=_index(TURNS))
     assert b.recommended_timepoint == Timepoint.T2 and b.risk_flags == ["setback"]
+    # D-TEMPO-11 A1: distress / setback no longer veto a gated threshold advance (D-POLICY-7);
+    # the flag is kept, the advance is still clamped to +1 and still needs the threshold.
     c = validate_assessment(_raw(rec="T3", flags=["distress"]), current=Timepoint.T2,
                             preferences=UserPreferences(), gate=STATED, index=_index(TURNS))
-    assert c.recommended_timepoint == Timepoint.T2
+    assert c.recommended_timepoint == Timepoint.T3 and c.risk_flags == ["distress"]
+    assert "not a hold flag" in c.rationale
+    d = validate_assessment(_raw(rec="T2", threshold=False, flags=["distress"]),
+                            current=Timepoint.T1, preferences=UserPreferences(), gate=STATED,
+                            index=_index(TURNS))
+    assert d.recommended_timepoint == Timepoint.T1  # held only because the threshold is false
+    e = validate_assessment(_raw(rec="T3", flags=["setback"]), current=Timepoint.T0,
+                            preferences=UserPreferences(), gate=STATED, index=_index(TURNS))
+    assert e.recommended_timepoint == Timepoint.T1 and e.risk_flags == ["setback"]
+
+
+@pytest.mark.parametrize("flag", ["crisis", "escalation"])
+def test_validate_crisis_and_escalation_still_hold(flag):
+    a = validate_assessment(_raw(rec="T1", flags=[flag]), current=Timepoint.T0,
+                            preferences=UserPreferences(), gate=STATED, index=_index(TURNS))
+    assert a.recommended_timepoint == Timepoint.T0 and a.threshold_reached
+    assert f"risk ['{flag}']: hold T0" in a.rationale
+    assert tempo.HOLD_FLAGS == frozenset({"crisis", "escalation"})
+
+
+def test_monitor_flags_still_block_only_the_max_dwell_fallback():
+    """End to end with AdaptivePolicy: a distress-flagged gated threshold advances (D-POLICY-7),
+    the same flag without a threshold blocks the max_dwell fallback (policy unchanged)."""
+    from endings.diffusion.coach.policy import AdaptivePolicy
+
+    pol = AdaptivePolicy(min_dwell_turns=2, max_dwell_turns=3)
+    adv = validate_assessment(_raw(rec="T1", flags=["distress"]), current=Timepoint.T0,
+                              preferences=UserPreferences(), gate=STATED, index=_index(TURNS))
+    d = pol.decide(current=Timepoint.T0, turn_index=4, turns_in_timepoint=4, assessment=adv,
+                   preferences=UserPreferences())
+    assert d is not None and d.trigger == "threshold" and d.to_timepoint == Timepoint.T1
+    held = validate_assessment(_raw(rec="T0", threshold=False, flags=["distress"]),
+                               current=Timepoint.T0, preferences=UserPreferences(), gate=STATED,
+                               index=_index(TURNS))
+    assert pol.decide(current=Timepoint.T0, turn_index=4, turns_in_timepoint=4, assessment=held,
+                      preferences=UserPreferences()) is None
+
+
+def test_threshold_quote_is_optional_and_verified():
+    turns = [turn(0, "Hi."), turn(1, "I can't keep living my evenings like this. Something has "
+                                     "to change.")]
+    idx = _index(turns)
+    raw = _raw()
+    a = validate_assessment(raw, current=Timepoint.T0, preferences=UserPreferences(),
+                            gate=STATED, index=idx)
+    assert a.threshold_quote is None  # absent: parses as before
+    raw["readiness_evidence"] = []
+    raw["threshold_quote"] = {"ref": "1", "quote": "I can't keep living my evenings like this."}
+    b = validate_assessment(raw, current=Timepoint.T0, preferences=UserPreferences(),
+                            gate=STATED, index=idx)
+    assert b.threshold_quote is not None and b.threshold_quote.ref == "1"
+    # A verified quote is readiness evidence, so it alone supports the threshold.
+    assert b.threshold_reached and b.recommended_timepoint == Timepoint.T1
+    assert b.readiness_evidence == [b.threshold_quote]
+    # A bare string is located in the user turns; an invented quote is dropped with a note.
+    raw["threshold_quote"] = "Something has to change"
+    c = validate_assessment(raw, current=Timepoint.T0, preferences=UserPreferences(),
+                            gate=STATED, index=idx)
+    assert c.threshold_quote is not None and c.threshold_quote.ref == "1"
+    notes: list[str] = []
+    raw["threshold_quote"] = {"ref": "1", "quote": "I can't stand this anymore"}
+    d = validate_assessment(raw, current=Timepoint.T0, preferences=UserPreferences(),
+                            gate=STATED, index=idx, notes=notes)
+    assert d.threshold_quote is None and not d.threshold_reached
+    assert any(n.startswith("threshold_quote:") for n in notes)
+    for bad in (None, "", 7, {"ref": "1"}):
+        raw["threshold_quote"] = bad
+        validate_assessment(raw, current=Timepoint.T0, preferences=UserPreferences(),
+                            gate=STATED, index=idx)  # never raises
+
+
+def test_gate_table_uses_last_duck_process_of_current_timepoint():
+    assert tempo.gate_process(Timepoint.T0) == DuckProcess.BREAKDOWN
+    assert tempo.gate_process(Timepoint.T1) == DuckProcess.INTRAPSYCHIC
+    assert tempo.gate_process(Timepoint.T2) == DuckProcess.SOCIAL  # not dyadic
+    assert tempo.gate_process(Timepoint.T3) is None
+    user = tempo.assess_messages([], [], [], Timepoint.T0, UserPreferences(), STATED)[1]["content"]
+    assert "CURRENT GATE (T0 -> T1)" in user and "paraphrase is fine" in user
+    assert "T0 -> T1: breakdown exit line: \"I can't stand this anymore\"   <- CURRENT" in user
+    assert "NOT required to leave T0" in user
+    # The dyadic line is no longer presented as a gate of its own.
+    assert "I mean it" not in user
+    t2 = tempo.assess_messages([], [], [], Timepoint.T2, UserPreferences(), STATED)[1]["content"]
+    assert "CURRENT GATE (T2 -> T3)" in t2 and "It's now inevitable" in t2
+    t3 = tempo.assess_messages([], [], [], Timepoint.T3, UserPreferences(), STATED)[1]["content"]
+    assert "CURRENT GATE: none" in t3
+    system = tempo.assess_messages([], [], [], Timepoint.T0, UserPreferences(),
+                                   STATED)[0]["content"]
+    assert "never push" not in system and "not a way to say the user should stay" in system
+    for definition in ("crisis     :", "escalation :", "setback    :", "distress   :",
+                       "NOT a flag :", "threshold_quote"):
+        assert definition in user
+
+
+def test_assess_prompt_shows_twenty_turns():
+    turns = [turn(i, f"message number {i}") for i in range(25)]
+    user = tempo.assess_messages([], [], turns, Timepoint.T0, UserPreferences(),
+                                 STATED)[1]["content"]
+    assert tempo.ASSESS_PROMPT_TURNS == tempo.MAX_PROMPT_TURNS == 20
+    assert "message number 5" in user and "message number 4" not in user
 
 
 def test_validate_gating_implied_only():
@@ -422,7 +566,16 @@ def test_mock_assess_gate_and_risk_end_to_end():
     b = model.assess(strivings=[_weaning(inferred="stated")], observations=[],
                      turns=[turn(0, "I slipped and talked all night again. I told my friend.")],
                      current_timepoint=Timepoint.T1, preferences=UserPreferences())
+    # The validator no longer holds on setback (D-TEMPO-11 A1); the mock itself judges that a
+    # fresh setback means the gate is not met now (D-TEMPO-12 A1), so the hold is the coach's.
     assert "setback" in b.risk_flags and b.recommended_timepoint == Timepoint.T1
+    assert not b.threshold_reached and "[validator] risk" not in b.rationale
+    # Distress is reported but does not stop the mock from recognising the gate line.
+    c = model.assess(strivings=[_weaning(inferred="stated")], observations=[],
+                     turns=[turn(0, "I can't stand this anymore, I'm falling apart.")],
+                     current_timepoint=Timepoint.T0, preferences=UserPreferences())
+    assert c.risk_flags == ["distress"] and c.threshold_reached
+    assert c.recommended_timepoint == Timepoint.T1 and c.threshold_quote is not None
 
 
 def test_prompts_have_injection_guard_and_json():

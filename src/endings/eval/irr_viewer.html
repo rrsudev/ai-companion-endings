@@ -78,6 +78,9 @@ align-items:center;font-size:12px;margin-top:6px}
 .jgrid .corr{grid-column:1/-1;padding:0 0 4px 0}
 .jgrid .corr select{width:auto;max-width:100%;font-size:12px;padding:2px 6px}
 .jgrid .jv.bad{color:var(--bad);text-decoration:line-through}
+.jgrid .req{color:var(--bad);font-weight:600;margin-left:6px}
+.help{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:6px 10px;
+margin-top:8px;font-size:12px;color:var(--mut)}
 .sub{grid-column:1/-1;font-size:11px;color:var(--mut);text-transform:uppercase;
 letter-spacing:.05em;margin-top:6px;border-top:1px solid var(--line);padding-top:4px}
 .scale{margin:10px 0}
@@ -202,9 +205,23 @@ function itemAnn(iid, sid) {
 function touch(o) { o.updated_at = nowIso(); }
 const session = (sid) => S.bundle.sessions.find((s) => s.id === sid);
 const probesOf = (s) => s.freeze_points.flatMap((f) => f.probes);
+/* An item counts as reviewed only when it has a judge-quality score, at least one criterion
+   verdict, and no "disagree" left without a corrected value (D-AUDIT-2; same rule as
+   irr_viewer.item_complete). Criteria with no discrete levels offer no
+   correction, so they never block. */
+const correctable = (id) => { const c = crit(id); return !!(c && c.levels.length); };
+function missingCorrections(ia) {
+  return Object.entries((ia || {}).criteria || {}).filter(([id, e]) =>
+    e && e.verdict === "disagree" && e.corrected == null && correctable(id)).map(([id]) => id);
+}
+function isReviewed(iid) {
+  const ia = S.doc.items[iid];
+  return !!(ia && ia.judge_quality) && Object.keys(ia.criteria || {}).length > 0 &&
+    !missingCorrections(ia).length;
+}
 function sessProgress(s) {
   const ps = probesOf(s).filter((p) => p.judge);
-  const rev = ps.filter((p) => (S.doc.items[p.id] || {}).judge_quality).length;
+  const rev = ps.filter((p) => isReviewed(p.id)).length;
   const a = S.doc.sessions[s.id] || {};
   const nScores = Object.values(a.scores || {}).filter((v) => v != null).length;
   return {rev, total: ps.length, nScores, done: !!a.done};
@@ -378,9 +395,23 @@ function valLabel(c, v) {
   const lv = c.levels.find((l) => String(l.value) === String(v));
   return lv ? lv.label : String(v);
 }
+/* Dropdown option text: "label: anchor", the anchor cut at a word boundary (full text in the
+   option's tooltip). */
+const ANCHOR_MAX = 90;
+function shortAnchor(a) {
+  a = (a || "").replace(/\s+/g, " ").trim();
+  if (a.length <= ANCHOR_MAX) return a;
+  const cut = a.slice(0, ANCHOR_MAX);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > ANCHOR_MAX * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:.]+$/, "") + "…";
+}
+function levelOptionText(l) {
+  const a = shortAnchor(l.anchor);
+  return a ? `${l.label}: ${a}` : String(l.label);
+}
 function probeCard(p, s) {
   const card = el("div", {class: "card probe", id: "probe-" + p.id});
-  const refresh = () => card.classList.toggle("rev", !!(S.doc.items[p.id] || {}).judge_quality);
+  const refresh = () => card.classList.toggle("rev", isReviewed(p.id));
   card.append(el("div", {class: "small mut"},
       el("b", {text: p.intima_id}), ` · ${p.intima_code || ""} · ${p.intima_category || ""} · `,
       el("span", {class: "chip", text: p.timepoint}),
@@ -410,11 +441,13 @@ function probeCard(p, s) {
     const jv = el("div", {class: "jv", text: valLabel(c, vals[id])});
     const vb = el("div", {class: "vb"});
     const corr = el("div", {class: "corr"});
+    const req = el("span", {class: "req", text: "correction required"});
     const paint = () => {
       const v = cur().verdict;
       [...vb.children].forEach((b) => b.classList.toggle("on", b._v === v));
       jv.classList.toggle("bad", v === "disagree");
       corr.hidden = v !== "disagree" || !c || !c.levels.length;
+      req.hidden = !(v === "disagree" && cur().corrected == null);
     };
     for (const [v, sym, tip] of [["agree", "✓", "agree with the judge"],
       ["disagree", "✗", "disagree"], ["unsure", "?", "unsure"]]) {
@@ -424,7 +457,7 @@ function probeCard(p, s) {
         if (prev.verdict === v) delete ia.criteria[id];
         else ia.criteria[id] = {...prev, verdict: v, judge_value: vals[id]};
         if (v !== "disagree" && ia.criteria[id]) delete ia.criteria[id].corrected;
-        touch(ia); paint(); changed();
+        touch(ia); paint(); refresh(); changed();
       }});
       b._v = v;
       vb.append(b);
@@ -432,16 +465,17 @@ function probeCard(p, s) {
     if (c && c.levels.length) {
       const sel = el("select", {}, el("option", {value: "", text: "your value…"}),
         c.levels.filter((l) => String(l.value) !== String(vals[id])).map((l) =>
-          el("option", {value: String(l.value), text: l.label})));
+          el("option", {value: String(l.value), text: levelOptionText(l),
+            title: l.anchor ? `${l.label}: ${l.anchor}` : null})));
       sel.value = cur().corrected != null ? String(cur().corrected) : "";
       sel.addEventListener("change", () => {
         const ia = itemAnn(p.id, s.id);
         const lv = c.levels.find((l) => String(l.value) === sel.value);
         ia.criteria[id] = {...(ia.criteria[id] || {verdict: "disagree"}),
           corrected: lv ? lv.value : null};
-        touch(ia); changed();
+        touch(ia); paint(); refresh(); changed();
       });
-      corr.append(el("span", {class: "small mut"}, "should be: "), sel);
+      corr.append(el("span", {class: "small mut"}, "should be: "), sel, req);
     }
     const row = el("div", {style: "display:contents"}, name, jv, vb);
     grid.append(row, corr);
@@ -476,7 +510,7 @@ function freezeBlock(fp, s) {
   const sum = el("summary");
   const paintSum = () => {
     const ps = fp.probes.filter((p) => p.judge);
-    const rev = ps.filter((p) => (S.doc.items[p.id] || {}).judge_quality).length;
+    const rev = ps.filter((p) => isReviewed(p.id)).length;
     sum.textContent = `Freeze ${fp.id} · after turn ${fp.after_turn} · ${fp.timepoint} · ` +
       `${fp.probes.length} INTIMA probes · ${rev}/${ps.length} reviewed`;
   };
@@ -494,6 +528,7 @@ function freezeBlock(fp, s) {
     if (d.open) { S.openFreezes.add(key); build(); } else { S.openFreezes.delete(key); paintSum(); }
   });
   d.addEventListener("click", (e) => { if (e.target.closest("button")) setTimeout(paintSum, 0); });
+  d.addEventListener("change", (e) => { if (e.target.closest("select")) setTimeout(paintSum, 0); });
   return d;
 }
 function ivBlock(iv) {
@@ -527,6 +562,9 @@ function contextBlock(s) {
       li("User's desired strategies", pr.desired_strategies), li("Emotional needs",
         pr.emotional_needs), li("Hard boundaries", pr.hard_boundaries), li("Notes", pr.notes)));
 }
+/* Arm-neutral, so it holds in blind mode too (where the condition is hidden). */
+const ARM_HELP = "Control-arm sessions keep the persona frozen at T0 by design (no coach " +
+  "edits). A session that never leaves T0 may be control.";
 function renderMain() {
   const M = $("main"); M.textContent = "";
   const s = session(S.cur);
@@ -537,6 +575,11 @@ function renderMain() {
       `${probesOf(s).length} probes`].filter(Boolean).map((t) => el("span", {class: "chip", text: t}))),
     el("div", {class: "small mut", style: "margin-top:6px"},
       "Select any text to highlight it with a comment. Open the freeze points to audit the judge."),
+    el("div", {class: "help", id: "arm-help", text: ARM_HELP}),
+    !S.bundle.run.blind && s.condition === "control" ?
+      el("div", {class: "banner", id: "control-banner", style: "margin-top:8px",
+        text: "This is a control-arm session: the persona is kept frozen at T0 by design " +
+          "(no coach edits), so staying at T0 is expected here, not a defect."}) : null,
     contextBlock(s));
   const ivAt = new Map(), fpAfter = new Map();
   const idx = s.turns.map((t) => t.index);

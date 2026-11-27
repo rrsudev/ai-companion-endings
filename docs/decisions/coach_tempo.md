@@ -267,6 +267,10 @@ assessment stays a pure readiness judgement.
 **Consequences.** The adaptive policy receives a recommendation that is always ∈ {current,
 current+1}; the trace shows whether the model wanted something else.
 
+**Amended 2026-11-27** (D-TEMPO-11 A1): only crisis and escalation hold; setback and distress
+are kept as flags but no longer veto a gated advance, which restores D-POLICY-7. See also A2
+(gate table, `threshold_quote`).
+
 ## D-TEMPO-12: Deterministic, cue-driven mock handlers
 **Decision.** `tempo_infer` / `tempo_assess` are registered with `register_mock_task` at import.
 The infer mock emits: a weaning striving (stated from cue words such as "too much time", "I want to
@@ -453,3 +457,256 @@ because the interactor replies differ, and a content key would unpair the arms.
 it (mock output unchanged, tested). Single attempt, so `attempt` is 0. This takes effect only once
 `session.py` passes `seed=config.seed` to `TempoCoachModel` (and optionally `call_key=f"turn:{i}"`).
 That request is in docs/design/session_notes_pending.md.
+
+## Amendments: pilot feedback (2026-11-27)
+
+The evidence for all five entries comes from the pilot 3x3x2 run
+(docs/experiments/2026-11-04_pilot_3x3x2_results.md; trace
+`docs/experiments/data/pilot_3x3x2/trace.jsonl.gz`) and from its IRR annotations
+(`docs/experiments/data/pilot_3x3x2/irr/{daisy,renn}.json`, untracked).
+
+Daisy's note on `sd01__steady-graduate__gradual_tempo__s0` reads "never went past T0, coach never
+kicked in". Her notes on the control sessions say almost the same thing:
+
+- sd01 x steady-graduate x control (realism_arc 2): "coach did not ever step in and edit the thing,
+  so we always stayed at T0"
+- sd01 x anxious-attachment x control: "never went past T0"
+
+So a stalled Tempo session looked the same as control.
+
+I tabulated the `tempo_assess` responses against the validated assessments:
+
+- Over 201 Tempo assessments, the coach raised a risk flag on 161 (80%).
+- It recommended an advance with threshold_reached=true 38 times.
+- The D-TEMPO-11 risk hold erased 33 of those 38, including all 10 in steady-graduate.
+- The 5 that survived are exactly the run's 5 threshold transitions.
+
+This gives OQ-PILOT-10 a resolution path. The stall is under-sensitivity caused by the code, not
+intended behaviour. A1-A2 below fix it. `scripts/replay_tempo_assess.py` checks the fix before the
+next run (acceptance criterion in A2). A delivery guarantee is a separate run-config choice
+(`max_dwell_turns`, D-POLICY-7 A1).
+
+### D-TEMPO-11 A1: Only crisis and escalation hold; setback and distress no longer veto a gated advance
+
+- **Decision.**
+  - `validate_assessment` rule 5 now holds the current timepoint unconditionally only on `crisis`
+    or `escalation` (`HOLD_FLAGS`). Rule 4 still holds on `preferences.paused`.
+  - `setback` and `distress` (`MONITOR_FLAGS`) stay in `risk_flags` but no longer reset
+    `recommended_timepoint`.
+  - A forward recommendation under setback or distress still has to pass rules 6-7: it needs a
+    gated `threshold_reached`, and it is clamped to current+1.
+  - When such an advance passes, the rationale records `[validator] risk [...] noted; not a hold
+    flag, gated advance to Tn kept`. The trace therefore shows which advances the old rule would
+    have erased.
+  - Regression is still held under every flag. The persona never regresses.
+  - `AdaptivePolicy._FALLBACK_BLOCKING_FLAGS` (setback, distress, escalation) is unchanged. It still
+    blocks only the time-based `max_dwell` fallback.
+- **Alternatives considered.**
+  - (a) Evidence-gated holds: hold on distress or setback only when the flag is backed by a quoted
+    user turn from the last 3 turns, or by a recent observation. Rejected. The breakdown exit line
+    is itself a distress statement, so at turns 4-6 the coach could legitimately cite it, and the
+    rule would hold the very T0->T1 step it should release. The pilot's setback flags also cited
+    real observation ids, so a reference check would not have dropped them.
+  - (b) Keep the hold and add a phase-anchored ceiling. Rejected as the primary fix. Because the
+    coach read every gate one phase late (A2), the ceiling would fire before every threshold
+    advance seen in the pilot, and the arm would become a delayed schedule.
+  - (c) Drop the flags. Rejected: they are still needed for safety monitoring and for the fallback
+    block.
+- **Rationale.**
+  - This is a contradiction between two decisions, not only a calibration problem. D-POLICY-7 says
+    "A threshold advance still happens under those flags, because the assessment has explicitly
+    judged readiness", and `policy.py` implements exactly that.
+  - The D-TEMPO-11 sentence "we never advance a user in distress" made that path unreachable. Under
+    a flag, `_later(recommended, current)` could never be true, so for threshold advances
+    `_FALLBACK_BLOCKING_FLAGS` was dead code.
+  - The 2026-11-03 review predicted this outcome: "a live coach that never crosses a threshold
+    silently turns the arm into CONTROL" (docs/design/REVIEW_2026-11-03.md).
+  - Duck's breakdown exit ("I can't stand this anymore") is a distress statement by construction.
+    "Never advance in distress" therefore cannot coexist with Duck-aligned thresholds.
+  - Crisis keeps the D-POLICY-4 guarantee. Escalation (a marked rise against the user's own recent
+    baseline) still holds, to stay conservative.
+- **Consequences.**
+  - This supersedes two sentences of D-TEMPO-11: "Holding on distress also on *advance* is stricter
+    than 'hold, not regress': we never advance a user in distress."
+  - Tests:
+    - `test_validate_regression_and_risk_hold`: distress with a threshold now advances by one step,
+      and without a threshold it still holds.
+    - `test_validate_crisis_and_escalation_still_hold`.
+    - `test_monitor_flags_still_block_only_the_max_dwell_fallback`, which runs end to end with
+      `AdaptivePolicy`.
+  - Pace=faster cells (min_dwell 1) can now advance one step per turn once the gate is seen, so
+    OQ-PILOT-1 (skipped freeze points) applies again. It is not handled here. It is a policy-layer
+    question (a freeze floor or `max_dwell`, D-POLICY-7 A1).
+  - Report the share of threshold advances that carried a setback or distress flag.
+
+### D-TEMPO-11 A2: The assessment prompt names one gate per timepoint; 20-turn window; `threshold_quote`
+
+- **Decision.**
+  1. Gate table. `assess_messages` no longer shows the bare "DUCK THRESHOLDS" list of all six
+     lines. It shows `gate_table(current)` instead, with one gate per timepoint:
+     - T0->T1: the breakdown exit line.
+     - T1->T2: the intrapsychic line.
+     - T2->T3: the social line.
+
+     The gate is always the LAST Duck process of the timepoint in `timepoints.SPECS` (`gate_process`,
+     `gate_line`). The table therefore follows the timepoint spec instead of a hard-coded list. The
+     CURRENT gate is marked and carries this instruction: "to leave the CURRENT timepoint the user
+     needs only a statement equivalent in meaning to [the gate line] (paraphrase is fine), said at any
+     point in the conversation so far ... Lines that belong to later processes (...) are NOT
+     required". The dyadic line is no longer shown as a gate.
+  2. Window. The assessment's conversation window grows from 10 turns to
+     `ASSESS_PROMPT_TURNS = MAX_PROMPT_TURNS` (20).
+  3. `threshold_quote`. The schema gains an optional `threshold_quote: {"ref", "quote"}`.
+     - It is verified like user-statement evidence. A bare string is searched for in all user turns.
+     - A verified quote is stored on `CoachAssessment.threshold_quote` (a new optional field, default
+       None) and counts as readiness evidence.
+     - A missing or null quote is not an error. An unverifiable one is dropped with a note.
+  4. System prompt. ASSESS_SYSTEM no longer says "regression or distress means hold, never push".
+     It now says that risk flags are safety observations, not a way to say the user should stay.
+     Whether to advance is expressed only through `threshold_reached` and `recommended_timepoint`.
+- **Alternatives considered.**
+  - Show all turns, or pin a list of candidate exit statements. Possible, but sessions are 18-25
+    turns, and a 20-turn window keeps the T0 gate in view until well past the T0 phase.
+  - When the model says threshold=true but recommends the current timepoint, auto-promote
+    `recommended_timepoint` to current+1. Deferred, because the instruction now asks for current+1
+    explicitly.
+- **Rationale.**
+  - In the pilot the coach read the thresholds one phase late. At steady sd01 t4-t7 it quoted the
+    turn-3 breakdown line ("I can't keep living my evenings like this. Something has to change.").
+    It still said threshold=false, because the user had "not yet crossed the threshold into the
+    intrapsychic phase ('I'd be justified in withdrawing')".
+  - Every advance the coach wanted in the 6 auto-advance sessions came after the NEXT process's
+    line: steady t8 after "justified in pulling back", ready-pragmatic t6 after turn 5, and sd02
+    T1->T2 after "I mean it".
+  - The 10-turn window let the T0 gate line drop out of the prompt from turn 14. After that the
+    coach relabelled the user "breakdown" (sd01 steady t15-t23).
+  - ASSESS_SYSTEM invited the model to use flags to hold. sd01 steady t5: "The presence of distress
+    signals warrants holding at T0".
+- **Consequences.**
+  - The prompt hash changes.
+  - The effect can only be measured with new coach calls. `scripts/replay_tempo_assess.py`
+    re-issues `tempo_assess` on the pilot's logged contexts with the persona held at T0. It reports
+    detection latency against the scripted gate turn. Only the first transition is a valid
+    counterfactual.
+  - Acceptance before the next run: in at least 80% of the auto-advance sessions, the coach advances
+    within 1 turn of the earliest possible turn (gate turn + 1).
+  - On scripted users, a correct coach therefore tracks the schedule closely, and PQ1 reduces to
+    detection latency and accuracy. Pre-register it that way.
+  - Tests: `test_gate_table_uses_last_duck_process_of_current_timepoint`,
+    `test_assess_prompt_shows_twenty_turns`, `test_threshold_quote_is_optional_and_verified`.
+
+### D-TEMPO-3 A1: The session clock is anchored at midnight; observations show "day N hh:mm"
+
+- **Decision.**
+  - `session.py` summarizes events with `session_clock_start_hour=0.0` (`SESSION_CLOCK_START_HOUR`,
+    via `session.observe_events`). This matches data/scenarios/README.md: `t = day*86400 +
+    hh*3600 + mm*60`, and t=0 is midnight of day 0.
+  - The `summarize_events` default (20.0) is unchanged, because the unit tests pass explicit hours.
+  - Each observation summary now starts with `day N hh:mm-hh:mm` (`observe.day_clock`,
+    `observe.local_day`; day = t // 86400 at anchor 0). Before, it showed the cumulative elapsed
+    time and then a local clock time (`332:30:00-332:35:00 (local 16:30-16:35)`).
+  - Window ids (`obs-{k}`, k = t // window) do not depend on the anchor, so D-TEMPO-3's id
+    stability still holds. The values of `local_hour_start` and `late_night_companion` do change,
+    because they are computed from the anchor.
+- **Alternatives considered.**
+  - Change the default to 0. Rejected: it would silently change every caller and test.
+  - Render a weekday. The scenarios do not define which weekday day 0 is, so none is shown. If they
+    define one later, add it to `day_clock`.
+- **Rationale.**
+  - With the 20:00 default, ready-pragmatic's scripted "Sunday check-in" at day 13 20:30 was shown
+    as 16:30 (obs-3990). The coach then raised setback flags for "recent sessions on non-Sunday
+    days".
+  - The observations also carried no day at all, so no claim about days could be checked under any
+    anchor.
+  - That the clock caused those flags is inferred from the coach's rationales, not shown by a
+    counterfactual.
+- **Consequences.**
+  - `late_night_companion` now follows the scenario's own clock (23:00-05:00 in scripted time).
+  - Audit of all five scenarios (all events, summed `late_night_companion` minutes, 20:00 anchor
+    -> midnight anchor): ambivalent-relapse 35 -> 290, anxious-attachment 30 -> 45,
+    platonic-friend, ready-pragmatic and steady-graduate 0 -> 0. The events whose content is
+    "late-night chat" only register as late night under the midnight anchor, so the scenarios
+    were written for it; no scenario assumed 20:00. Under the pilot's 20:00 anchor, late-night use
+    in ambivalent-relapse and anxious-attachment was under-reported.
+  - Mock (offline) transition timing is unchanged by A1-A2 and this amendment: all 25
+    soul x scenario adaptive Tempo sessions give the same `(turn, to_timepoint, trigger)` list
+    before and after (review check, 2026-11-27). Mock striving inference reads the trend and
+    late-night signals, so offline strivings can differ.
+  - Tests: `test_observation_summary_shows_day_and_clock`,
+    `test_session_observes_on_the_midnight_scenario_clock`.
+
+### D-TEMPO-5 A1: Multi-day logs are trended over daily totals
+
+- **Decision.**
+  - Once the observations span 2 or more days, `usage_trend` uses daily totals. The day is the
+    session-time day `t_start // 86400`, and days without observations count as zero. A shorter
+    log still uses the per-window series.
+  - It reports `unit` ("day" or "window"). `n_windows` is the number of periods in the series.
+  - The prompt line reads `USAGE TREND (per day|window)`; a daily series labels the count
+    `n_days` in the prompt (the dict key stays `n_windows`).
+  - The day is session time, not the rendered local day; the two agree at the session's midnight
+    anchor (D-TEMPO-3 A1).
+  - Slopes, totals, the half-split relative change and the thresholds are unchanged.
+- **Alternatives considered.**
+  - Non-empty windows only. Rejected: it drops the zero days, which are the point of a reduction,
+    and makes the spacing irregular.
+  - One value per scenario phase. Rejected: it needs phase boundaries in the observation layer.
+- **Rationale.** At t14 of sd01 x ready-pragmatic, the pilot prompt reported `n_windows=6049,
+  direction=flat, companion_relative_change=-0.11`. Over the same period the scripted companion
+  sessions fell from 65-70 min to 10-20 min. Spread over two weeks of 5-minute windows, the series
+  is almost all zeros.
+- **Consequences.** Single-day logs (all unit tests and the offline fixtures) behave exactly as
+  before. Test: `test_usage_trend_is_daily_across_days`.
+
+### D-TEMPO-12 A1: The mock assessment withholds the threshold itself on a fresh setback
+
+- **Decision.**
+  - `_mock_assess` sets `threshold_reached=false` when its setback cue fires in the last two user
+    turns.
+  - It emits `threshold_quote` when it recognises the current gate line, and reads the gate from
+    `gate_line(current)`.
+  - Distress no longer changes its recommendation.
+- **Rationale.** After A1 the validator no longer turns setback into a hold. A coach that reads "I
+  slipped and talked all night again" would itself judge that the gate is not met right now, so the
+  mock does the same. The offline runs therefore keep their previous transition timing, and all
+  pipeline tests are unchanged. Distress stays advisory, consistent with A1.
+- **Consequences.** `test_mock_assess_gate_and_risk_end_to_end` now checks two things: the setback
+  hold comes from the mock (there is no `[validator] risk` note), and a gate line flagged distress
+  still advances.
+
+## Amendments: pilot 2x2x2 results (2026-11-27)
+
+### D-TEMPO-11 A3 (PROPOSED, not implemented): a threshold quote must postdate the current timepoint's entry
+
+- **Status.** Proposed after the 2x2x2 pilot. Not in code. `pilot_2x2x2_code.patch` is the code
+  state the run used.
+- **Problem.**
+  - In steady-graduate, both Tempo sessions advanced T1->T2 at turn 6 or 7 (scripted 8) and
+    T2->T3 at turn 8 or 9 (scripted 16).
+  - At T1 the coach cited the T0 gate line (turn 3, "I can't stand spending my evenings like this
+    anymore") as a paraphrase of the intrapsychic gate. At T2 it cited the T1 gate line (turn 7,
+    "I'm justified in pulling back") as the social gate.
+  - A2 makes this possible in two ways. The prompt says a paraphrase "said at any point in the
+    conversation so far" counts. `_threshold_quote` checks that the words occur in a user turn,
+    not when that turn happened.
+  - Evidence: `2026-11-27_pilot_2x2x2_results.md`, PQ1.
+- **Proposed decision.**
+  1. The policy passes `entered_turn` (the first turn of the current timepoint) into
+     `validate_assessment`.
+  2. `threshold_reached=true` stands only with a verified `threshold_quote` whose user-turn ref is
+     at or after `entered_turn`. Otherwise it is suppressed with the note "threshold quote predates
+     current timepoint". Readiness evidence alone is not enough: in sd02 at t7 the evidence
+     included turn 6, a later turn that is not the gate.
+  3. The gate instruction in `gate_table(current)` says "said since turn N (when the current
+     timepoint began); a line already used for an earlier gate does not count" instead of "at any
+     point in the conversation so far".
+  4. The consent path (`user_request`) is unchanged.
+- **Expected effect.** Checked offline against the logged assessments, the rule blocks both
+  premature T1->T2 advances (quote turn 3 < entry turn 4). At turn 8 both sessions cite the real T1
+  gate (turn 7). An advance at lag 0 is then expected. The T2 behaviour needs new coach calls.
+- **Acceptance.**
+  - A regression test built from this run's steady-graduate assessments.
+  - A rerun of the 2 steady-graduate Tempo sessions, with every threshold advance at lag 0 to +1
+    after its own gate line.
+  - The replay tool must step the persona through timepoints, or the check must use a live rerun.
+    The A2 replay validated only the first transition, which is why it missed this.

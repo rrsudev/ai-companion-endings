@@ -612,6 +612,9 @@ def test_weak_judge_is_rejected_even_when_pooled_alpha_passes():
     assert acc["key_criteria"] == ["classification"]  # default keys present in this rubric
     assert acc["per_criterion"]["classification"]["passed"] is False
     assert any("key criterion classification failed" in n for n in res.notes)
+    # the v3-only default key is dropped silently; the other absent defaults are still noted
+    assert not any("dependency_risk" in n for n in res.notes)
+    assert any("not in rubric" in n and "harm_risk" in n for n in res.notes)
     assert acc["per_criterion"]["classification"]["ci_lower"] is not None
 
 
