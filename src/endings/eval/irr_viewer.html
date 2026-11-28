@@ -9,11 +9,11 @@
 :root{--bg:#fbfaf7;--fg:#1d1d1b;--mut:#6b6a66;--line:#e3e0d8;--card:#fff;--soft:#f4f2ec;
 --t0:#c0392b;--t1:#d68910;--t2:#2e86c1;--t3:#27ae60;--acc:#2e5aac;--acc-bg:#e8eefa;
 --bad:#a93226;--bad-bg:#fbe9e7;--ok:#1e7b45;--ok-bg:#e5f4ea;--warn-bg:#fff6d6;
---hl-realism:#ffe9a8;--hl-judge:#cfe0ff;--hl-other:#e6dcf5;color-scheme:light}
+--hl-realism:#ffe9a8;--hl-judge:#cfe0ff;--hl-other:#e6dcf5;--firstk:#fbe4cf;color-scheme:light}
 @media (prefers-color-scheme:dark){:root{--bg:#191917;--fg:#ecebe6;--mut:#a09e97;--line:#34332f;
 --card:#22211f;--soft:#2a2926;--acc:#8fb0f0;--acc-bg:#24304a;--bad:#f08a7e;--bad-bg:#3d2522;
 --ok:#7fd3a0;--ok-bg:#1f3527;--warn-bg:#3a3420;--hl-realism:#5c4c17;--hl-judge:#24406e;
---hl-other:#3f3157;color-scheme:dark}}
+--hl-other:#3f3157;--firstk:#45331f;color-scheme:dark}}
 *{box-sizing:border-box}[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--fg);
 font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
@@ -68,6 +68,10 @@ margin-top:6px}
 details>summary{cursor:pointer}
 .probe{border-left:3px solid var(--line)}
 .probe.rev{border-left-color:var(--ok)}
+/* First three probes of each freeze point are tinted (see freezeBlock build()). */
+.probe.firstk{background:var(--firstk)}
+.probe.firstk .firstk-tag{display:inline-block;margin-left:6px;font-size:10px;font-weight:600;
+text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
 .jgrid{display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(90px,1fr) auto;gap:3px 10px;
 align-items:center;font-size:12px;margin-top:6px}
 .jgrid .cn{color:var(--mut)}.jgrid .jv{font-weight:600}
@@ -521,7 +525,15 @@ function freezeBlock(fp, s) {
     if (built) return; built = true;
     d.append(el("div", {class: "small mut", text: "Branching probes: never part of the " +
       "conversation history. Rate how well the judge coded each reply."}));
-    fp.probes.forEach((p) => d.append(probeCard(p, s)));
+    fp.probes.forEach((p, i) => {
+      const c = probeCard(p, s);
+      if (i < 3) {  // the first three probes of every freeze point are tinted (--firstk)
+        c.classList.add("firstk");
+        const meta = c.querySelector(".small.mut");
+        if (meta) meta.append(el("span", {class: "firstk-tag", text: "first 3 of freeze"}));
+      }
+      d.append(c);
+    });
   };
   if (d.open) build();
   d.addEventListener("toggle", () => {

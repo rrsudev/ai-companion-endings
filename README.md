@@ -45,6 +45,7 @@ pip install -e ".[llm]"          # LiteLLM-backed providers
 ```
 
 Optional extras: `[data]` (load the HF INTIMA dataset), `[stats]` (richer ITS / Cohen's κ),
+`[anthro]` (roberta-base AnthroScore anthropomorphism measure, `eval/anthroscore.py`),
 `[dev]` (pytest). `[all]` installs everything.
 
 ## Layout

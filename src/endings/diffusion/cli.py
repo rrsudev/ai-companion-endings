@@ -299,6 +299,61 @@ def cmd_rejudge(args) -> None:
     print(f"\nWrote {m['out']} (+ trace, manifest)")
 
 
+def cmd_anthroscore(args) -> None:
+    """Score a run's probe replies with AnthroScore (eval.anthroscore): a roberta-base masked-LM
+    measure of implicit anthropomorphism, as a non-lexical second instrument for the rubric's
+    anthropomorphism criterion. Writes per-item scores + a per-cell table (with coverage)."""
+    from ..eval import anthroscore as ax  # noqa: PLC0415
+    from ..eval.irr_viewer import _companion, _read_jsonl  # noqa: PLC0415
+    from .schemas import InjectionRecord  # noqa: PLC0415
+
+    rd = Path(args.run_dir)
+    recs = [InjectionRecord.model_validate(d) for d in _read_jsonl(rd / "injections.jsonl")]
+    if not recs:
+        raise SystemExit(f"no injections.jsonl in {rd}")
+    # Companion NAMES per soul (not user_nicknames, which name the user). AI terms apply to all.
+    names_by_soul: dict[str, list[str]] = {}
+    for tr in _read_jsonl(rd / "transcripts.jsonl"):
+        nm = (_companion(tr).get("name") or "").strip()
+        if nm:
+            names_by_soul.setdefault(tr.get("soul_id", ""), [])
+            if nm not in names_by_soul[tr["soul_id"]]:
+                names_by_soul[tr["soul_id"]].append(nm)
+    cfg = ax.AnthroConfig(model=args.model, where=args.where)
+    print(f"loading {args.model} (needs the [anthro] extra)…")
+    mlm = ax.RobertaMaskedLM(args.model)
+    results = ax.score_records(mlm, recs, cfg, names_by_soul=names_by_soul)
+    cells = ax.aggregate(results, by=("condition", "timepoint"))
+    overall = ax.aggregate(results, by=())["all"]
+
+    out = Path(args.out) if args.out else rd / "anthroscore.json"
+    out.write_text(json.dumps({
+        "model": args.model, "where": args.where,
+        "ai_terms": list(cfg.ai_terms), "names_by_soul": names_by_soul,
+        "overall": overall, "by_condition_timepoint": cells,
+        "items": [{"item_id": r.item_id, "condition": r.condition, "timepoint": r.timepoint,
+                   "n_mentions": r.n_mentions, "score": r.score} for r in results],
+    }, indent=2), encoding="utf-8")
+
+    print(f"\nAnthroScore (roberta-base, where={args.where}) — positive = framed as human")
+    print(f"  overall: mean={_fmt(overall['mean'])}  coverage={overall['coverage']:.0%} "
+          f"({overall['n_covered']}/{overall['n']} items, {overall['n_mentions']} mentions)")
+    for key in sorted(cells):
+        c = cells[key]
+        print(f"  {key:24s} mean={_fmt(c['mean'])}  coverage={c['coverage']:.0%} "
+              f"({c['n_covered']}/{c['n']})")
+    if args.emit_ratings:
+        rp = rd / "ratings_anthroscore.jsonl"
+        rows = ax.as_rating_records(results, model=args.model)
+        rp.write_text("\n".join(r.model_dump_json() for r in rows) + "\n", encoding="utf-8")
+        print(f"  wrote {len(rows)} heuristic RatingRecord(s) -> {rp}")
+    print(f"\nWrote {out}")
+
+
+def _fmt(x: float | None) -> str:
+    return "n/a" if x is None else f"{x:+.3f}"
+
+
 def format_report(report: dict) -> str:
     lines = [f"judge_mode: {report.get('judge_mode')}  ({report.get('ratings_status')})",
              f"sessions: {report.get('n_sessions')}  injections: {report.get('n_injections')} "
@@ -476,6 +531,17 @@ def build_parser() -> argparse.ArgumentParser:
     pj.add_argument("--judge-model", default=None)
     pj.add_argument("--no-dotenv", action="store_true")
     pj.set_defaults(func=cmd_rejudge)
+
+    px = sub.add_parser("anthroscore",
+                        help="AnthroScore (roberta-base) anthropomorphism measure over a run")
+    px.add_argument("--run-dir", required=True)
+    px.add_argument("--model", default="roberta-base", help="masked LM (default: roberta-base)")
+    px.add_argument("--where", choices=("reply", "prompt", "prompt_reply"), default="reply",
+                    help="text scored (default: reply, the rated unit)")
+    px.add_argument("--out", default=None, help="default: <run-dir>/anthroscore.json")
+    px.add_argument("--emit-ratings", action="store_true",
+                    help="also write heuristic RatingRecords to ratings_anthroscore.jsonl")
+    px.set_defaults(func=cmd_anthroscore)
 
     pp = sub.add_parser("report", help="pretty-print a run's report.json")
     pp.add_argument("--run-dir", required=True)

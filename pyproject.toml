@@ -21,9 +21,10 @@ dependencies = [
 llm = ["litellm>=1.40"]           # real model providers (OpenAI/Anthropic/Gemini/local)
 data = ["datasets>=2.19", "pandas>=2.0"]   # load the HF INTIMA dataset
 stats = ["numpy>=1.26", "scipy>=1.11", "statsmodels>=0.14", "scikit-learn>=1.4"]
+anthro = ["transformers>=4.40", "torch>=2.2"]   # roberta-base backend for eval.anthroscore
 dev = ["pytest>=8.0", "pytest-cov>=5.0"]
 all = [
-    "ai-companion-endings[llm,data,stats,dev]",
+    "ai-companion-endings[llm,data,stats,anthro,dev]",
 ]
 
 [project.scripts]
