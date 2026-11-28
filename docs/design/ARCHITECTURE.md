@@ -40,7 +40,7 @@ Supporting roles: **translator** (soul documents → English), **judge** (rubric
 
 | module | responsibility |
 |---|---|
-| `diffusion/schemas.py` | **the data contract** (do not change field semantics without an ADR) |
+| `diffusion/schemas.py` | **the data contract** (do not change field semantics without an entry under "Contract amendments" in `docs/decisions/deploy.md`) |
 | `diffusion/timepoints.py` | **single source of truth** for T0–T3: Duck mapping, behaviour mix, retained fields, item-level scrub of retained rules/habits/style (`scrub_persona`, `persona_dose`; D-DEPLOY-10), prompt guidance |
 | `diffusion/config.py` | `DiffusionConfig`, `.env` loader |
 | `diffusion/soul/` | ingest (load, translate, extract, sanitize), editing (apply `SoulEdit`, versioning, diff), render (soul doc → interactor system prompt) |
@@ -59,8 +59,8 @@ Supporting roles: **translator** (soul documents → English), **judge** (rubric
 | `eval/qualitative.py` | export for qualitative coding |
 | `tracing.py` | JSONL trace of every LLM call (effective params, response metadata, `Tracer.context` ids, seqs referenced from turns/injections/ratings) + manifest (dependency versions, call defaults; D-DEPLOY-12–14) |
 
-The pre-existing 7-stage TTM loop (`breakup/`, `pipeline.py`) is retained unchanged as a separate,
-earlier design; see ADR-0001.
+The pre-existing 7-stage TTM loop (`breakup/`, `tempo/`, `personas/`, `pipeline.py`) is retained
+unchanged as a separate, earlier design.
 
 ## Conventions
 
@@ -78,4 +78,4 @@ earlier design; see ADR-0001.
   **not yet validated live**; see OQ-DEPLOY-4.
 * Each module documents its design decisions in `docs/decisions/<module>.md` as numbered entries
   (`D-<MODULE>-n`: decision, alternatives, rationale, consequence) and its open questions as
-  `OQ-<MODULE>-n`; these are consolidated into `docs/adr/` and `docs/OPEN_QUESTIONS.md`.
+  `OQ-<MODULE>-n`.
